@@ -40,7 +40,7 @@ removed; the editor moves existing split points only.
 | ← → | Move the cursor by the small step (1 s) |
 | ⌥← ⌥→, PageUp PageDown | Move the cursor by the large step (15 s) |
 | ⇧← ⇧→ | Move the cursor by one cue frame (1/75 s) |
-| ↑ ↓ | Cursor to the selection start / end |
+| ↑ ↓ | Cursor to the selection start / end; to the start / end of the file when nothing is selected |
 | [ ] | Cursor to the previous / next split point and select it |
 | , . (5 6) | Move the selection by one cue frame; with ⇧, ten |
 | M / ⇧M | Move the selected split point to the selection start / end |
@@ -59,6 +59,7 @@ unless that shortcut is turned off in System Settings.
 | Gesture | Action |
 | --- | --- |
 | Drag | Select a range; the nearest split point becomes the selected one |
+| Click | Move the cursor; a click outside the selection clears it |
 | ⇧-click | Extend the selection |
 | Drag a numbered handle | Move that split point |
 | ⌥-drag, right-drag | Move the split point nearest to where the drag starts |

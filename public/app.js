@@ -702,9 +702,9 @@ overlay.addEventListener("pointerdown", (e) => {
     S.drag = { kind: "select", anchor, x: e.clientX, moved: true };
     S.sel = { a: Math.min(anchor, f), b: Math.max(anchor, f) };
   } else {
+    // The selection is left alone until the pointer moves or is released, so
+    // that a click inside it keeps it (see clickAt).
     S.drag = { kind: "select", anchor: f, x: e.clientX, moved: false };
-    S.sel = { a: f, b: f };
-    S.pos = f;
   }
   draw();
 });
@@ -733,15 +733,19 @@ overlay.addEventListener("pointerup", () => {
   if (!d) return;
   if (d.kind === "cue") return endCueDrag(true);
   S.drag = null;
-  if (!d.moved) S.sel = { a: S.pos, b: S.pos };
+  if (!d.moved) return clickAt(d.anchor);
   // A new selection usually brackets a transition: pick the split point
   // nearest to it so that M (or ↑ while dragging) acts on it right away.
-  else {
-    S.selectedCue = nearestCue(S.sel.a);
-    renderTracks();
-  }
-  setPos(S.sel.b > S.sel.a ? S.sel.a : S.pos, { follow: false });
+  S.selectedCue = nearestCue(S.sel.a);
+  renderTracks();
+  setPos(S.sel.a, { follow: false });
 });
+
+// A click moves the cursor; outside the selection it also clears it.
+function clickAt(f) {
+  if (f < S.sel.a || f > S.sel.b) S.sel = { a: f, b: f };
+  setPos(f, { follow: false });
+}
 
 let renderQueued = false;
 function renderTracksSoon() {
@@ -767,7 +771,7 @@ strip.addEventListener("pointerdown", (e) => {
     }
   });
   if (hit >= 0) startCueDrag(hit, e, strip);
-  else if (e.button === 0) setPos(frameAtX(x), { follow: false });
+  else if (e.button === 0) clickAt(frameAtX(x));
 });
 strip.addEventListener("pointermove", (e) => {
   if (S.drag?.kind !== "cue") return;
@@ -788,7 +792,7 @@ overview.addEventListener("pointerdown", (e) => {
   if (!S.ready || e.button !== 0) return;
   capture(overview, e.pointerId);
   S.drag = { kind: "overview" };
-  setPos(overviewFrame(e), { follow: false });
+  clickAt(Math.round(overviewFrame(e)));
   centerOn(S.pos);
 });
 overview.addEventListener("pointermove", (e) => {
@@ -877,11 +881,12 @@ window.addEventListener("keydown", (e) => {
     case "PageDown":
       setPos(S.pos + (code === "PageUp" ? -1 : 1) * step(settings.large));
       break;
+    // Selection edges, or the ends of the file when nothing is selected.
     case "ArrowUp":
-      setPos(selOrCursor().a);
+      setPos(S.sel.b > S.sel.a ? S.sel.a : 0);
       break;
     case "ArrowDown":
-      setPos(selOrCursor().b);
+      setPos(S.sel.b > S.sel.a ? S.sel.b : S.frames);
       break;
     case "F5":
     case "F6":
