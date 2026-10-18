@@ -61,7 +61,7 @@ unless that shortcut is turned off in System Settings.
 | Drag | Select a range; the nearest split point becomes the selected one |
 | Click | Move the cursor; a click outside the selection clears it |
 | ⇧-click | Extend the selection |
-| Drag a numbered handle | Move that split point |
+| Drag a handle | Move that split point (each handle is labelled "NN Artist - Title") |
 | ⌥-drag, right-drag | Move the split point nearest to where the drag starts |
 | ↑ ↓ while dragging a split point | Drop it on the selection start / end |
 | Two-finger scroll | Scroll |

@@ -519,12 +519,25 @@ function drawStrip() {
     g.fillText(label, x + 3 * d, 2 * d);
   }
   const y0 = RULER_H * d;
+  const w = 9 * d;
+  const xs = S.cues.map((cue) => Math.round(xOf(cueToFrame(cue))));
+  // Each label runs from its handle to the next one; the label of the track
+  // whose handle has scrolled off to the left sticks to the left edge.
   g.textBaseline = "middle";
-  S.cues.forEach((cue, i) => {
-    const x = Math.round(xOf(cueToFrame(cue)));
-    if (x < -30 * d || x > c.width + 30 * d) return;
+  g.fillStyle = COLORS.text;
+  S.cues.forEach((_, i) => {
+    const next = i + 1 < xs.length ? xs[i + 1] - w / 2 : Math.round(xOf(S.frames));
+    const start = Math.max(xs[i] + w / 2 + 3 * d, 4 * d);
+    if (next < 0 || start > c.width) return;
+    const room = next - 6 * d - start;
+    const number = String(S.tracks[i].number).padStart(2, "0");
+    // Fall back to the bare number where even a shortened label does not fit.
+    const text = fitText(g, trackLabel(S.tracks[i]), room) || (g.measureText(number).width <= room ? number : "");
+    if (text) g.fillText(text, start, (y0 + c.height) / 2);
+  });
+  xs.forEach((x, i) => {
+    if (x < -w || x > c.width + w) return;
     g.fillStyle = cueColor(i);
-    const w = 9 * d;
     g.beginPath();
     g.moveTo(x - w / 2, y0);
     g.lineTo(x + w / 2, y0);
@@ -533,9 +546,24 @@ function drawStrip() {
     g.lineTo(x - w / 2, c.height - 8 * d);
     g.closePath();
     g.fill();
-    g.fillStyle = COLORS.text;
-    g.fillText(String(S.tracks[i].number), x + w / 2 + 3 * d, (y0 + c.height) / 2);
   });
+}
+
+const trackLabel = (t) =>
+  `${String(t.number).padStart(2, "0")} ${[t.performer, t.title].filter(Boolean).join(" - ")}`.trim();
+
+// Shortens `text` with an ellipsis to fit `width`; "" when not even two
+// characters fit.
+function fitText(g, text, width) {
+  if (g.measureText(text).width <= width) return text;
+  let lo = 0;
+  let hi = text.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (g.measureText(`${text.slice(0, mid)}…`).width <= width) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo >= 2 ? `${text.slice(0, lo)}…` : "";
 }
 
 function drawOverlay() {
