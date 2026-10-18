@@ -4,13 +4,13 @@
 const CUE_FPS = 75;
 const $ = (id) => document.getElementById(id);
 
-const DEFAULT_SETTINGS = { small: 1, large: 15, preview: 2 };
+const DEFAULT_SETTINGS = { small: 1, large: 15, preview: 2, scale: "db" };
 const settings = { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem("cue-edit:settings") || "{}") };
 
 const S = {
   sr: 44100,
   frames: 0,
-  peaks: new Int8Array(0),
+  peaks: new Uint16Array(0),
   tracks: [],
   cues: [], // cue frames
   loaded: [], // cues as opened (for the Δ column)
@@ -396,17 +396,13 @@ const COLORS = {
   dim: "#7d8390",
 };
 
-// Peaks hold one [min, max] pair per cue frame (1/75 s): detail finer than a
-// cue sheet can express is not worth showing.
+// Peaks hold the largest absolute sample of each cue frame (1/75 s): detail
+// finer than a cue sheet can express is not worth showing.
 function cueRange(k0, k1) {
   const p = S.peaks;
-  let lo = 127;
-  let hi = -128;
-  for (let k = Math.max(0, k0); k < k1 && 2 * k + 1 < p.length; k++) {
-    if (p[2 * k] < lo) lo = p[2 * k];
-    if (p[2 * k + 1] > hi) hi = p[2 * k + 1];
-  }
-  return hi < lo ? null : [lo, hi];
+  let peak = -1;
+  for (let k = Math.max(0, k0); k < k1 && k < p.length; k++) if (p[k] > peak) peak = p[k];
+  return peak;
 }
 
 function frameRange(f0, f1) {
@@ -414,17 +410,31 @@ function frameRange(f0, f1) {
   return cueRange(k0, Math.max(k0 + 1, frameToCue(f1)));
 }
 
+// Bar height (0–1) for a peak. On the dB scale (as in mp3DirectCut) the axis
+// runs from -DB_RANGE dB at the bottom to 0 dB at the top, so fades and
+// reverb tails stay visible; the linear scale is proportional to amplitude.
+const DB_RANGE = 48;
+const DB_LINES = [-6, -12, -18, -24, -36];
+function level(peak) {
+  if (settings.scale !== "db") return peak / 32768;
+  const db = 20 * Math.log10(Math.max(peak, 1) / 32768);
+  return clamp((db + DB_RANGE) / DB_RANGE, 0, 1);
+}
+
+// Draws a bar for `peak` over columns [x0, x1): rising from the bottom on the
+// dB scale, mirrored around the middle on the linear one.
+function drawBar(g, h, x0, x1, peak) {
+  const v = level(peak) * (h - 2);
+  if (settings.scale === "db") g.fillRect(x0, h - v, x1 - x0, Math.max(1, v));
+  else g.fillRect(x0, (h - v) / 2, x1 - x0, Math.max(1, v));
+}
+
 function drawWave() {
   const c = canvases.wave;
   const g = c.getContext("2d");
   g.clearRect(0, 0, c.width, c.height);
   if (!S.ready) return;
-  const mid = c.height / 2;
-  const scale = (c.height / 2 - 2) / 128;
-  const bar = (x0, x1, r) => {
-    const top = mid - r[1] * scale;
-    g.fillRect(x0, top, x1 - x0, Math.max(1, mid - r[0] * scale - top));
-  };
+  const d = dpr();
   g.fillStyle = COLORS.wave;
   const pxPerCue = S.sr / CUE_FPS / S.view.spp;
   if (pxPerCue >= 2) {
@@ -432,22 +442,36 @@ function drawWave() {
     const gap = pxPerCue >= 6 ? 1 : 0;
     const k1 = frameToCue(Math.min(S.frames, viewEnd()));
     for (let k = Math.max(0, frameToCue(S.view.start)); k <= k1; k++) {
-      const r = cueRange(k, k + 1);
-      if (!r) continue;
+      const peak = cueRange(k, k + 1);
+      if (peak < 0) continue;
       const x0 = Math.round(xOf(cueToFrame(k)));
       const x1 = Math.round(xOf(cueToFrame(k + 1)));
-      bar(x0, Math.max(x0 + 1, x1 - gap), r);
+      drawBar(g, c.height, x0, Math.max(x0 + 1, x1 - gap), peak);
     }
   } else {
     for (let x = 0; x < c.width; x++) {
       const f0 = S.view.start + x * S.view.spp;
       if (f0 >= S.frames) break;
-      const r = frameRange(f0, f0 + S.view.spp);
-      if (r) bar(x, x + 1, r);
+      const peak = frameRange(f0, f0 + S.view.spp);
+      if (peak >= 0) drawBar(g, c.height, x, x + 1, peak);
     }
   }
-  g.fillStyle = "rgba(255,255,255,0.08)";
-  g.fillRect(0, mid, c.width, 1);
+  g.font = `${10 * d}px -apple-system, sans-serif`;
+  g.textAlign = "right";
+  g.textBaseline = "middle";
+  if (settings.scale === "db") {
+    for (const db of DB_LINES) {
+      const y = Math.round(c.height - ((db + DB_RANGE) / DB_RANGE) * (c.height - 2));
+      g.fillStyle = "rgba(255,255,255,0.10)";
+      g.fillRect(0, y, c.width, 1);
+      g.fillStyle = COLORS.dim;
+      g.fillText(`${db} dB`, c.width - 4 * d, y - 7 * d);
+    }
+  } else {
+    g.fillStyle = "rgba(255,255,255,0.08)";
+    g.fillRect(0, c.height / 2, c.width, 1);
+  }
+  g.textAlign = "left";
 }
 
 let overviewImage = null;
@@ -464,13 +488,10 @@ function drawOverview() {
     overviewImage.height = c.height;
     const o = overviewImage.getContext("2d");
     const spp = S.frames / c.width;
-    const mid = c.height / 2;
-    const scale = (c.height / 2 - 2) / 128;
     o.fillStyle = "#2b4a68";
     for (let x = 0; x < c.width; x++) {
-      const r = frameRange(x * spp, (x + 1) * spp);
-      if (!r) continue;
-      o.fillRect(x, mid - r[1] * scale, 1, Math.max(1, (r[1] - r[0]) * scale));
+      const peak = frameRange(x * spp, (x + 1) * spp);
+      if (peak >= 0) drawBar(o, c.height, x, x + 1, peak);
     }
   }
   g.clearRect(0, 0, c.width, c.height);
@@ -1010,6 +1031,14 @@ window.addEventListener("keydown", (e) => {
     case "KeyO":
       zoomKey(2);
       break;
+    case "KeyL":
+      settings.scale = settings.scale === "db" ? "linear" : "db";
+      localStorage.setItem("cue-edit:settings", JSON.stringify(settings));
+      overviewImage = null;
+      drawWave();
+      draw();
+      toast(settings.scale === "db" ? "Waveform: dB scale" : "Waveform: linear scale");
+      break;
     case "KeyM": {
       const { a, b } = selOrCursor();
       moveCue(S.selectedCue, e.shiftKey ? b : a);
@@ -1059,7 +1088,7 @@ window.addEventListener("keydown", (e) => {
 
 function openHelp() {
   const form = $("settings");
-  for (const k of Object.keys(DEFAULT_SETTINGS)) form.elements[k].value = settings[k];
+  for (const k of Object.keys(DEFAULT_SETTINGS)) if (form.elements[k]) form.elements[k].value = settings[k];
   $("help").showModal();
 }
 $("help-button").addEventListener("click", openHelp);
@@ -1100,6 +1129,11 @@ async function load() {
     $("loading").textContent = `Decoding… ${(info.frames / info.sampleRate).toFixed(0)} s`;
     await new Promise((r) => setTimeout(r, 300));
   }
+  // A server started before an update sends peaks this page cannot read.
+  if (info.peaks !== "cue-frame-u16") {
+    $("loading").textContent = "The cue-edit server is older than this page. Restart cue-edit and reload.";
+    return;
+  }
   if (info.error) {
     $("loading").textContent = `Decoding failed: ${info.error}`;
     return;
@@ -1112,7 +1146,7 @@ async function load() {
   S.saved = [...S.cues];
   S.cueName = info.cueName;
   S.album = info.title;
-  S.peaks = new Int8Array(await (await fetch("/api/peaks")).arrayBuffer());
+  S.peaks = new Uint16Array(await (await fetch("/api/peaks")).arrayBuffer());
   $("title").textContent = [info.performer, info.title].filter(Boolean).join(" – ") || info.cueName;
   $("files").textContent = `${info.cueName} · ${info.audioName} · ${fmtTime(info.frames)}`;
   $("files").parentElement.title = `${info.cuePath}\n${info.audioName}`;

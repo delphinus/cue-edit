@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { CUE_FPS, onlyIndexesChanged, parseCue, rewriteIndexes } from "./lib/cue";
 
+const PEAKS_FORMAT = "cue-frame-u16"; // one little-endian u16 peak per cue frame
 const CHANNELS = 2; // PCM is always served as interleaved stereo s16le
 const BYTES_PER_FRAME = CHANNELS * 2;
 
@@ -75,7 +76,7 @@ const decode = {
   done: false,
   error: "",
   frames: 0,
-  peaks: [] as Int8Array[],
+  peaks: [] as Uint16Array[],
 };
 
 async function runDecode() {
@@ -86,11 +87,12 @@ async function runDecode() {
   const writer = Bun.file(pcmPath).writer();
   let carry = new Uint8Array(0);
   // One peak entry per cue frame (1/75 s), the finest step a cue sheet can
-  // express. Entry k covers frames [round(k * sr / 75), round((k + 1) * sr / 75)).
+  // express: the largest absolute sample of both channels, kept at 16 bits so
+  // that quiet passages can be drawn on a dB scale. Entry k covers frames
+  // [round(k * sr / 75), round((k + 1) * sr / 75)).
   let block = 0;
   let blockEnd = Math.round(sampleRate / CUE_FPS);
-  let blockMin = 0;
-  let blockMax = 0;
+  let blockPeak = 0;
   let blockFill = 0;
   let frame = 0;
   let pending: number[] = [];
@@ -106,15 +108,14 @@ async function runDecode() {
     const whole = data.length - (data.length % BYTES_PER_FRAME);
     const view = new DataView(data.buffer, data.byteOffset, whole);
     for (let off = 0; off < whole; off += BYTES_PER_FRAME) {
-      const l = view.getInt16(off, true);
-      const r = view.getInt16(off + 2, true);
-      const lo = l < r ? l : r;
-      const hi = l < r ? r : l;
-      if (blockFill === 0 || lo < blockMin) blockMin = lo;
-      if (blockFill === 0 || hi > blockMax) blockMax = hi;
+      const l = Math.abs(view.getInt16(off, true));
+      const r = Math.abs(view.getInt16(off + 2, true));
+      if (l > blockPeak) blockPeak = l;
+      if (r > blockPeak) blockPeak = r;
       blockFill++;
       if (++frame === blockEnd) {
-        pending.push(blockMin >> 8, blockMax >> 8);
+        pending.push(blockPeak);
+        blockPeak = 0;
         blockFill = 0;
         blockEnd = Math.round(((++block + 1) * sampleRate) / CUE_FPS);
       }
@@ -122,12 +123,12 @@ async function runDecode() {
     decode.frames += whole / BYTES_PER_FRAME;
     carry = data.slice(whole);
     if (pending.length >= 8192) {
-      decode.peaks.push(Int8Array.from(pending));
+      decode.peaks.push(Uint16Array.from(pending));
       pending = [];
     }
   }
-  if (blockFill > 0) pending.push(blockMin >> 8, blockMax >> 8);
-  if (pending.length) decode.peaks.push(Int8Array.from(pending));
+  if (blockFill > 0) pending.push(blockPeak);
+  if (pending.length) decode.peaks.push(Uint16Array.from(pending));
   await writer.end();
   const code = await proc.exited;
   if (code !== 0) {
@@ -147,7 +148,7 @@ runDecode().then(() => {
 
 function peaksBody(): Uint8Array {
   const total = decode.peaks.reduce((n, p) => n + p.length, 0);
-  const out = new Int8Array(total);
+  const out = new Uint16Array(total);
   let off = 0;
   for (const p of decode.peaks) {
     out.set(p, off);
@@ -209,6 +210,8 @@ const server = Bun.serve({
           title: s.title,
           performer: s.performer,
           sampleRate,
+          // Format of /api/peaks; the page refuses to run against another.
+          peaks: PEAKS_FORMAT,
           frames: decode.frames,
           done: decode.done,
           error: decode.error,

@@ -46,6 +46,7 @@ removed; the editor moves existing split points only.
 | M / ⇧M | Move the selected split point to the selection start / end |
 | I O (= −) | Zoom in / out |
 | 0 | Show the whole file |
+| L | Switch the waveform between the dB and linear scales |
 | ⌘Z ⇧⌘Z | Undo / redo |
 | ⌘S | Save (a notification confirms it) |
 | Esc | Cancel a drag, clear the selection |
@@ -88,6 +89,8 @@ they are kept in the browser's local storage.
   waveform shows the track at the cursor (or the playhead) with the time
   elapsed since its split point in large type, plus the album and
   "Artist - Title" at the bottom.
+- The waveform uses a dB scale by default (0 dB at the top, -48 dB at the
+  bottom), as mp3DirectCut does, so fades and reverb tails stay visible.
 - The waveform is drawn at the same resolution: one bar per cue frame when
   zoomed in, and zooming stops once a cue frame is 32 px wide.
 - The Δ column shows how far each split point has moved since the sheet was
