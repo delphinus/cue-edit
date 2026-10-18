@@ -41,7 +41,7 @@ removed; the editor moves existing split points only.
 | ⌥← ⌥→, PageUp PageDown | Move the cursor by the large step (15 s) |
 | ⇧← ⇧→ | Move the cursor by one cue frame (1/75 s) |
 | ↑ ↓ | Cursor to the selection start / end; to the start / end of the file when nothing is selected |
-| [ ] | Cursor to the previous / next split point and select it |
+| [ ] | Cursor to the previous / next split point and select it; clears the selection, so 1–4 preview around the split point |
 | , . (5 6) | Move the selection by one cue frame; with ⇧, ten |
 | M / ⇧M | Move the selected split point to the selection start / end |
 | I O (= −) | Zoom in / out |

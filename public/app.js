@@ -251,7 +251,12 @@ function moveCue(i, frame, { undo = true } = {}) {
 
 function selectCue(i, { jump = true } = {}) {
   S.selectedCue = i;
-  if (jump && i >= 0) setPos(cueToFrame(S.cues[i]));
+  // Jumping clears the selection, so that 1–4 preview around the split point.
+  if (jump && i >= 0) {
+    const f = cueToFrame(S.cues[i]);
+    S.sel = { a: f, b: f };
+    setPos(f);
+  }
   renderTracks();
   draw();
 }
