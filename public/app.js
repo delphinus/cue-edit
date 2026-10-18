@@ -141,10 +141,13 @@ class Player {
   position() {
     if (!this.playing) return null;
     if (this.startTime === null) return this.from;
-    // contextTime is the time of the sample leaving the device right now.
-    const out = this.ctx.getOutputTimestamp?.().contextTime;
-    const latency = (this.ctx.outputLatency || 0) + (this.ctx.baseLatency || 0);
-    const now = out > 0 ? out : this.ctx.currentTime - latency;
+    // contextTime is the time of the sample leaving the device when
+    // performanceTime was taken; extrapolate it to now, since it only moves in
+    // render-quantum steps.
+    const ts = this.ctx.getOutputTimestamp?.();
+    let now;
+    if (ts?.contextTime > 0) now = ts.contextTime + Math.max(0, (performance.now() - ts.performanceTime) / 1000);
+    else now = this.ctx.currentTime - (this.ctx.outputLatency || 0) - (this.ctx.baseLatency || 0);
     const t = now - this.startTime;
     return clamp(this.from + Math.round(t * S.sr), this.from, this.to);
   }
@@ -321,15 +324,21 @@ const xOf = (f) => (f - S.view.start) / S.view.spp;
 const frameAtX = (x) => clamp(Math.round(S.view.start + x * S.view.spp), 0, S.frames);
 const maxSpp = () => Math.max(1, S.frames / waveWidth());
 
+// The view may run half a screen past either end of the file, so that the
+// playhead can stay centred there too. Snapping the start to whole pixels
+// keeps each column on the same frames while the waveform scrolls.
 function clampView() {
   S.view.spp = clamp(S.view.spp, 1, maxSpp());
-  S.view.start = clamp(S.view.start, 0, Math.max(0, S.frames - waveWidth() * S.view.spp));
+  const half = (waveWidth() * S.view.spp) / 2;
+  const start = clamp(S.view.start, -half, Math.max(-half, S.frames - half));
+  S.view.start = Math.round(start / S.view.spp) * S.view.spp;
 }
 
 function setView(start, spp) {
+  const prev = S.view;
   S.view = { start, spp };
   clampView();
-  drawWave();
+  if (S.view.start !== prev.start || S.view.spp !== prev.spp) drawWave();
   draw();
 }
 
@@ -371,11 +380,17 @@ const COLORS = {
 function wantFine() {
   if (S.view.spp >= S.block) return null;
   const span = waveWidth() * S.view.spp;
-  const start = Math.max(0, Math.floor(S.view.start - span));
+  const need0 = Math.max(0, S.view.start);
+  const need1 = Math.min(S.frames, viewEnd());
+  const start = Math.max(0, Math.floor(need0 - span));
   const count = Math.ceil(span * 3);
   const f = S.fine;
-  if (f && f.start <= S.view.start && f.start + f.count >= Math.min(S.frames, viewEnd())) return f;
-  if (!S.fineWanted || S.fineWanted.start !== start) {
+  const covers = f && f.start <= need0 && f.start + f.count >= need1;
+  // Fetch the next window before the view runs off this one (e.g. while the
+  // waveform scrolls under the playhead), so the fine view never drops out.
+  const runningOut = f && f.start + f.count < Math.min(S.frames, need1 + span);
+  if (covers && !runningOut) return f;
+  if (!S.fineWanted || (!covers && S.fineWanted.start !== start)) {
     S.fineWanted = { start, count };
     fetch(`/api/pcm?start=${start}&count=${count}`)
       .then((r) => r.arrayBuffer())
@@ -387,7 +402,7 @@ function wantFine() {
         drawWave();
       });
   }
-  return null;
+  return covers ? f : null;
 }
 
 function columnRange(f0, f1, fine) {
@@ -475,7 +490,7 @@ function drawOverview() {
     g.fillStyle = cueColor(i);
     g.fillRect(Math.round(cueToFrame(cue) * k), 0, 1, c.height);
   });
-  const ph = player.position();
+  const ph = head;
   g.fillStyle = ph !== null ? COLORS.playhead : COLORS.cursor;
   g.fillRect(Math.round((ph ?? S.pos) * k), 0, 1, c.height);
 }
@@ -500,7 +515,7 @@ function drawStrip() {
   g.font = `${11 * d}px -apple-system, sans-serif`;
   g.fillStyle = COLORS.dim;
   g.textBaseline = "top";
-  const t0 = Math.floor(S.view.start / S.sr / step) * step;
+  const t0 = Math.max(0, Math.floor(S.view.start / S.sr / step) * step);
   for (let t = t0; t * S.sr <= viewEnd(); t += step) {
     const x = Math.round(xOf(t * S.sr));
     g.fillRect(x, 0, 1, 5 * d);
@@ -547,7 +562,7 @@ function drawOverlay() {
   });
   g.fillStyle = COLORS.cursor;
   g.fillRect(Math.round(xOf(S.pos)), 0, d, c.height);
-  const ph = player.position();
+  const ph = head;
   if (ph !== null) {
     g.fillStyle = COLORS.playhead;
     g.fillRect(Math.round(xOf(ph)), 0, d, c.height);
@@ -566,7 +581,7 @@ function updateReadout() {
 
 let currentRow = -1;
 function updateCurrentRow() {
-  const here = frameToCue(player.position() ?? S.pos);
+  const here = frameToCue(head ?? S.pos);
   let cur = -1;
   for (let i = 0; i < S.cues.length && S.cues[i] <= here; i++) cur = i;
   if (cur === currentRow) return;
@@ -576,16 +591,20 @@ function updateCurrentRow() {
   currentRow = cur;
 }
 
+// Playhead for the frame being drawn. Read once per frame: the output clock
+// advances between calls, and the scroll and the line must agree.
+let head = null;
 let drawQueued = false;
 function draw() {
   if (drawQueued) return;
   drawQueued = true;
   requestAnimationFrame(() => {
     drawQueued = false;
-    const ph = player.position();
+    head = player.position();
+    const ph = head;
     if (ph !== null && !player.preview && !S.drag) {
-      // Follow the playhead by pages.
-      if (ph > viewEnd() || ph < S.view.start) setView(ph - (viewEnd() - S.view.start) * 0.05, S.view.spp);
+      // Keep the playhead centred and scroll the waveform under it.
+      setView(ph - (waveWidth() * S.view.spp) / 2, S.view.spp);
     }
     drawOverlay();
     drawStrip();

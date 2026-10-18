@@ -76,6 +76,8 @@ they are kept in the browser's local storage.
 
 ## Notes
 
+- During playback the playhead stays in the centre and the waveform scrolls
+  under it.
 - Split points are stored in cue frames (1/75 s). A point placed from the
   selection is rounded down to the cue frame at or before it.
 - The Δ column shows how far each split point has moved since the sheet was
