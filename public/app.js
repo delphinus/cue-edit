@@ -814,7 +814,8 @@ overview.addEventListener("pointerdown", (e) => {
   if (!S.ready || e.button !== 0) return;
   capture(overview, e.pointerId);
   S.drag = { kind: "overview" };
-  clickAt(Math.round(overviewFrame(e)));
+  // Navigation only: the selection stays where it is.
+  setPos(overviewFrame(e), { follow: false });
   centerOn(S.pos);
 });
 overview.addEventListener("pointermove", (e) => {
