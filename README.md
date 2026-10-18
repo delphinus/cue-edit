@@ -61,7 +61,7 @@ unless that shortcut is turned off in System Settings.
 | Drag | Select a range; the nearest split point becomes the selected one |
 | Click | Move the cursor; a click outside the selection clears it |
 | ⇧-click | Extend the selection |
-| Drag a handle | Move that split point (each handle is labelled "NN Artist - Title") |
+| Drag a handle | Move that split point (the marks above the waveform) |
 | ⌥-drag, right-drag | Move the split point nearest to where the drag starts |
 | ↑ ↓ while dragging a split point | Drop it on the selection start / end |
 | Two-finger scroll | Scroll |
@@ -84,6 +84,9 @@ they are kept in the browser's local storage.
 - Split points are stored in cue frames (1/75 s), the resolution of a cue
   sheet. Selection edges snap to cue frames for the same reason, so a split
   point put on the selection lines up with it exactly.
+- As in mp3DirectCut, the waveform is overlaid with each track's number and
+  the time elapsed since its split point along the top, and "Artist - Title"
+  along the bottom.
 - The waveform is drawn at the same resolution: one bar per cue frame when
   zoomed in, and zooming stops once a cue frame is 32 px wide.
 - The Δ column shows how far each split point has moved since the sheet was

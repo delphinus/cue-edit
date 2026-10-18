@@ -521,20 +521,6 @@ function drawStrip() {
   const y0 = RULER_H * d;
   const w = 9 * d;
   const xs = S.cues.map((cue) => Math.round(xOf(cueToFrame(cue))));
-  // Each label runs from its handle to the next one; the label of the track
-  // whose handle has scrolled off to the left sticks to the left edge.
-  g.textBaseline = "middle";
-  g.fillStyle = COLORS.text;
-  S.cues.forEach((_, i) => {
-    const next = i + 1 < xs.length ? xs[i + 1] - w / 2 : Math.round(xOf(S.frames));
-    const start = Math.max(xs[i] + w / 2 + 3 * d, 4 * d);
-    if (next < 0 || start > c.width) return;
-    const room = next - 6 * d - start;
-    const number = String(S.tracks[i].number).padStart(2, "0");
-    // Fall back to the bare number where even a shortened label does not fit.
-    const text = fitText(g, trackLabel(S.tracks[i]), room) || (g.measureText(number).width <= room ? number : "");
-    if (text) g.fillText(text, start, (y0 + c.height) / 2);
-  });
   xs.forEach((x, i) => {
     if (x < -w || x > c.width + w) return;
     g.fillStyle = cueColor(i);
@@ -549,8 +535,8 @@ function drawStrip() {
   });
 }
 
-const trackLabel = (t) =>
-  `${String(t.number).padStart(2, "0")} ${[t.performer, t.title].filter(Boolean).join(" - ")}`.trim();
+const trackNumber = (t) => String(t.number).padStart(2, "0");
+const trackName = (t) => [t.performer, t.title].filter(Boolean).join(" - ");
 
 // Shortens `text` with an ellipsis to fit `width`; "" when not even two
 // characters fit.
@@ -584,6 +570,7 @@ function drawOverlay() {
     g.fillStyle = cueColor(i);
     g.fillRect(x, 0, i === S.selectedCue ? 2 * d : d, c.height);
   });
+  drawTrackLabels(g, c, d);
   g.fillStyle = COLORS.cursor;
   g.fillRect(Math.round(xOf(S.pos)), 0, d, c.height);
   const ph = head;
@@ -591,6 +578,49 @@ function drawOverlay() {
     g.fillStyle = COLORS.playhead;
     g.fillRect(Math.round(xOf(ph)), 0, d, c.height);
   }
+}
+
+// Labels drawn over the waveform, as mp3DirectCut does: along the top, the
+// track number and the time elapsed since its split point at each tick;
+// along the bottom, "Artist - Title" of each track.
+function drawTrackLabels(g, c, d) {
+  const step = TICKS.find((t) => (t * S.sr) / S.view.spp / d >= 90) ?? TICKS.at(-1);
+  const stepFrames = step * S.sr;
+  g.save();
+  g.font = `${11 * d}px -apple-system, sans-serif`;
+  g.shadowColor = "rgba(0, 0, 0, 0.9)";
+  g.shadowBlur = 3 * d;
+  S.cues.forEach((cue, i) => {
+    const from = cueToFrame(cue);
+    const to = i + 1 < S.cues.length ? cueToFrame(S.cues[i + 1]) : S.frames;
+    if (to < S.view.start || from > viewEnd()) return;
+    const endX = xOf(to) - 4 * d;
+    const t = S.tracks[i];
+
+    g.textBaseline = "top";
+    for (let k = Math.max(0, Math.floor((S.view.start - from) / stepFrames)); ; k++) {
+      const f = from + k * stepFrames;
+      if (f >= to || f > viewEnd()) break;
+      const x = Math.round(xOf(f));
+      const elapsed = fmtTime(secs(k * step));
+      const label = `${trackNumber(t)} ${step < 1 ? elapsed : elapsed.replace(/\.000$/, "")}`;
+      // Leave room for the next track's own first label.
+      if (x + 3 * d + g.measureText(label).width > endX) continue;
+      g.fillStyle = COLORS.dim;
+      g.fillRect(x, 0, d, 6 * d);
+      g.fillStyle = COLORS.text;
+      g.fillText(label, x + 3 * d, 3 * d);
+    }
+
+    // The name of a track whose split point has scrolled off sticks to the left.
+    const start = Math.max(xOf(from) + 4 * d, 4 * d);
+    const text = fitText(g, trackName(t), endX - start);
+    if (text) {
+      g.textBaseline = "bottom";
+      g.fillText(text, start, c.height - 4 * d);
+    }
+  });
+  g.restore();
 }
 
 function updateReadout() {
