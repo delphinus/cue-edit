@@ -10,7 +10,6 @@ const settings = { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem("cue-
 const S = {
   sr: 44100,
   frames: 0,
-  block: 256,
   peaks: new Int8Array(0),
   tracks: [],
   cues: [], // cue frames
@@ -23,8 +22,6 @@ const S = {
   undo: [],
   redo: [],
   drag: null,
-  fine: null, // { start, count, data: Int16Array } for deep zoom
-  fineWanted: null,
   ready: false,
 };
 
@@ -344,12 +341,14 @@ const viewEnd = () => S.view.start + waveWidth() * S.view.spp;
 const xOf = (f) => (f - S.view.start) / S.view.spp;
 const frameAtX = (x) => clamp(Math.round(S.view.start + x * S.view.spp), 0, S.frames);
 const maxSpp = () => Math.max(1, S.frames / waveWidth());
+// Zooming in stops once a cue frame is 32 px wide; there is no finer detail.
+const minSpp = () => S.sr / CUE_FPS / (32 * dpr());
 
 // The view may run half a screen past either end of the file, so that the
 // playhead can stay centred there too. Snapping the start to whole pixels
 // keeps each column on the same frames while the waveform scrolls.
 function clampView() {
-  S.view.spp = clamp(S.view.spp, 1, maxSpp());
+  S.view.spp = clamp(S.view.spp, minSpp(), maxSpp());
   const half = (waveWidth() * S.view.spp) / 2;
   const start = clamp(S.view.start, -half, Math.max(-half, S.frames - half));
   S.view.start = Math.round(start / S.view.spp) * S.view.spp;
@@ -365,7 +364,7 @@ function setView(start, spp) {
 
 function zoomAround(frame, factor) {
   const x = xOf(frame);
-  const spp = clamp(S.view.spp * factor, 1, maxSpp());
+  const spp = clamp(S.view.spp * factor, minSpp(), maxSpp());
   setView(frame - x * spp, spp);
 }
 
@@ -387,7 +386,6 @@ function ensureVisible(f) {
 
 const COLORS = {
   wave: "#5b9bd5",
-  waveFine: "#7fb3e3",
   sel: "rgba(240, 180, 41, 0.22)",
   cursor: "#ffffff",
   playhead: "#5ce07a",
@@ -398,59 +396,22 @@ const COLORS = {
   dim: "#7d8390",
 };
 
-function wantFine() {
-  if (S.view.spp >= S.block) return null;
-  const span = waveWidth() * S.view.spp;
-  const need0 = Math.max(0, S.view.start);
-  const need1 = Math.min(S.frames, viewEnd());
-  const start = Math.max(0, Math.floor(need0 - span));
-  const count = Math.ceil(span * 3);
-  const f = S.fine;
-  const covers = f && f.start <= need0 && f.start + f.count >= need1;
-  // Fetch the next window before the view runs off this one (e.g. while the
-  // waveform scrolls under the playhead), so the fine view never drops out.
-  const runningOut = f && f.start + f.count < Math.min(S.frames, need1 + span);
-  if (covers && !runningOut) return f;
-  if (!S.fineWanted || (!covers && S.fineWanted.start !== start)) {
-    S.fineWanted = { start, count };
-    fetch(`/api/pcm?start=${start}&count=${count}`)
-      .then((r) => r.arrayBuffer())
-      .then((buf) => {
-        if (S.fineWanted?.start !== start) return;
-        const data = new Int16Array(buf, 0, buf.byteLength >> 1);
-        S.fine = { start, count: data.length >> 1, data };
-        S.fineWanted = null;
-        drawWave();
-      });
-  }
-  return covers ? f : null;
-}
-
-function columnRange(f0, f1, fine) {
+// Peaks hold one [min, max] pair per cue frame (1/75 s): detail finer than a
+// cue sheet can express is not worth showing.
+function cueRange(k0, k1) {
+  const p = S.peaks;
   let lo = 127;
   let hi = -128;
-  if (fine) {
-    const a = Math.max(fine.start, Math.floor(f0));
-    const b = Math.min(fine.start + fine.count, Math.max(a + 1, Math.ceil(f1)));
-    for (let f = a; f < b; f++) {
-      const i = (f - fine.start) * 2;
-      const l = fine.data[i] >> 8;
-      const r = fine.data[i + 1] >> 8;
-      if (l < lo) lo = l;
-      if (r < lo) lo = r;
-      if (l > hi) hi = l;
-      if (r > hi) hi = r;
-    }
-  } else {
-    const p = S.peaks;
-    const b0 = Math.floor(f0 / S.block);
-    const b1 = Math.max(b0 + 1, Math.ceil(f1 / S.block));
-    for (let b = b0; b < b1 && 2 * b + 1 < p.length; b++) {
-      if (p[2 * b] < lo) lo = p[2 * b];
-      if (p[2 * b + 1] > hi) hi = p[2 * b + 1];
-    }
+  for (let k = Math.max(0, k0); k < k1 && 2 * k + 1 < p.length; k++) {
+    if (p[2 * k] < lo) lo = p[2 * k];
+    if (p[2 * k + 1] > hi) hi = p[2 * k + 1];
   }
   return hi < lo ? null : [lo, hi];
+}
+
+function frameRange(f0, f1) {
+  const k0 = frameToCue(f0);
+  return cueRange(k0, Math.max(k0 + 1, frameToCue(f1)));
 }
 
 function drawWave() {
@@ -458,18 +419,32 @@ function drawWave() {
   const g = c.getContext("2d");
   g.clearRect(0, 0, c.width, c.height);
   if (!S.ready) return;
-  const fine = wantFine();
   const mid = c.height / 2;
   const scale = (c.height / 2 - 2) / 128;
-  g.fillStyle = fine ? COLORS.waveFine : COLORS.wave;
-  for (let x = 0; x < c.width; x++) {
-    const f0 = S.view.start + x * S.view.spp;
-    if (f0 >= S.frames) break;
-    const r = columnRange(f0, f0 + S.view.spp, fine);
-    if (!r) continue;
+  const bar = (x0, x1, r) => {
     const top = mid - r[1] * scale;
-    const bottom = mid - r[0] * scale;
-    g.fillRect(x, top, 1, Math.max(1, bottom - top));
+    g.fillRect(x0, top, x1 - x0, Math.max(1, mid - r[0] * scale - top));
+  };
+  g.fillStyle = COLORS.wave;
+  const pxPerCue = S.sr / CUE_FPS / S.view.spp;
+  if (pxPerCue >= 2) {
+    // Zoomed in: one bar per cue frame, the way mp3DirectCut shows frames.
+    const gap = pxPerCue >= 6 ? 1 : 0;
+    const k1 = frameToCue(Math.min(S.frames, viewEnd()));
+    for (let k = Math.max(0, frameToCue(S.view.start)); k <= k1; k++) {
+      const r = cueRange(k, k + 1);
+      if (!r) continue;
+      const x0 = Math.round(xOf(cueToFrame(k)));
+      const x1 = Math.round(xOf(cueToFrame(k + 1)));
+      bar(x0, Math.max(x0 + 1, x1 - gap), r);
+    }
+  } else {
+    for (let x = 0; x < c.width; x++) {
+      const f0 = S.view.start + x * S.view.spp;
+      if (f0 >= S.frames) break;
+      const r = frameRange(f0, f0 + S.view.spp);
+      if (r) bar(x, x + 1, r);
+    }
   }
   g.fillStyle = "rgba(255,255,255,0.08)";
   g.fillRect(0, mid, c.width, 1);
@@ -493,7 +468,7 @@ function drawOverview() {
     const scale = (c.height / 2 - 2) / 128;
     o.fillStyle = "#3d6a94";
     for (let x = 0; x < c.width; x++) {
-      const r = columnRange(x * spp, (x + 1) * spp, null);
+      const r = frameRange(x * spp, (x + 1) * spp);
       if (!r) continue;
       o.fillRect(x, mid - r[1] * scale, 1, Math.max(1, (r[1] - r[0]) * scale));
     }
@@ -1032,7 +1007,6 @@ async function load() {
   }
   S.sr = info.sampleRate;
   S.frames = info.frames;
-  S.block = info.block;
   S.tracks = info.tracks;
   S.cues = info.tracks.map((t) => t.index);
   S.loaded = [...S.cues];

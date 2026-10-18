@@ -4,16 +4,15 @@
 // Usage: cue-edit <sheet.cue> [--port <n>] [--no-open]
 //
 // The audio referenced by the FILE line is decoded once with ffmpeg into a raw
-// PCM file in a temporary directory. The browser fetches waveform peaks and
-// PCM windows from it, so playback and display are sample-accurate and use the
-// same decoder (and timeline) as an ffmpeg-based splitter.
+// PCM file in a temporary directory. The browser fetches waveform peaks (one
+// per cue frame) and PCM windows for playback from it, so what it shows and
+// plays uses the same decoder (and timeline) as an ffmpeg-based splitter.
 
 import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { onlyIndexesChanged, parseCue, rewriteIndexes } from "./lib/cue";
+import { CUE_FPS, onlyIndexesChanged, parseCue, rewriteIndexes } from "./lib/cue";
 
-const BLOCK = 256; // frames per peak entry
 const CHANNELS = 2; // PCM is always served as interleaved stereo s16le
 const BYTES_PER_FRAME = CHANNELS * 2;
 
@@ -86,9 +85,14 @@ async function runDecode() {
   );
   const writer = Bun.file(pcmPath).writer();
   let carry = new Uint8Array(0);
+  // One peak entry per cue frame (1/75 s), the finest step a cue sheet can
+  // express. Entry k covers frames [round(k * sr / 75), round((k + 1) * sr / 75)).
+  let block = 0;
+  let blockEnd = Math.round(sampleRate / CUE_FPS);
   let blockMin = 0;
   let blockMax = 0;
   let blockFill = 0;
+  let frame = 0;
   let pending: number[] = [];
   for await (const chunk of proc.stdout) {
     writer.write(chunk);
@@ -108,9 +112,11 @@ async function runDecode() {
       const hi = l < r ? r : l;
       if (blockFill === 0 || lo < blockMin) blockMin = lo;
       if (blockFill === 0 || hi > blockMax) blockMax = hi;
-      if (++blockFill === BLOCK) {
+      blockFill++;
+      if (++frame === blockEnd) {
         pending.push(blockMin >> 8, blockMax >> 8);
         blockFill = 0;
+        blockEnd = Math.round(((++block + 1) * sampleRate) / CUE_FPS);
       }
     }
     decode.frames += whole / BYTES_PER_FRAME;
@@ -203,7 +209,6 @@ const server = Bun.serve({
           title: s.title,
           performer: s.performer,
           sampleRate,
-          block: BLOCK,
           frames: decode.frames,
           done: decode.done,
           error: decode.error,
