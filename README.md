@@ -65,7 +65,7 @@ unless that shortcut is turned off in System Settings.
 | ↑ ↓ while dragging a split point | Drop it on the selection start / end |
 | Two-finger scroll | Scroll |
 | Pinch | Zoom around the pointer |
-| Click / drag the overview | Jump there |
+| Click / drag the overview | Move the cursor there; playback continues from it |
 
 A typical refinement: drag over the transition, check it with 1 and 2, adjust
 the selection with `,` and `.`, then press M to put the split point on the

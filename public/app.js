@@ -779,18 +779,29 @@ strip.addEventListener("pointermove", (e) => {
 strip.addEventListener("pointerup", () => endCueDrag(true));
 
 const overview = canvases.overview;
-function overviewJump(e) {
-  const f = (devX(e, overview) / overview.width) * S.frames;
-  centerOn(f);
-}
+const overviewFrame = (e) => clamp((devX(e, overview) / overview.width) * S.frames, 0, S.frames);
+
+// Clicking the overview moves the cursor there (playback continues from it).
+// While dragging, only the view and the cursor follow; playback restarts once
+// on release instead of on every move.
 overview.addEventListener("pointerdown", (e) => {
-  if (!S.ready) return;
+  if (!S.ready || e.button !== 0) return;
   capture(overview, e.pointerId);
   S.drag = { kind: "overview" };
-  overviewJump(e);
+  setPos(overviewFrame(e), { follow: false });
+  centerOn(S.pos);
 });
-overview.addEventListener("pointermove", (e) => S.drag?.kind === "overview" && overviewJump(e));
-overview.addEventListener("pointerup", () => (S.drag = null));
+overview.addEventListener("pointermove", (e) => {
+  if (S.drag?.kind !== "overview") return;
+  S.drag.moved = true;
+  S.pos = Math.round(overviewFrame(e));
+  centerOn(S.pos);
+});
+overview.addEventListener("pointerup", () => {
+  const moved = S.drag?.kind === "overview" && S.drag.moved;
+  S.drag = null;
+  if (moved) setPos(S.pos, { follow: false });
+});
 
 function onWheel(e) {
   if (!S.ready) return;
