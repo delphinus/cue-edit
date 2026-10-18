@@ -248,7 +248,7 @@ function moveCue(i, frame, { undo = true } = {}) {
 
 function selectCue(i, { jump = true } = {}) {
   S.selectedCue = i;
-  // Jumping clears the selection, so that 1–4 preview around the split point.
+  // Jumping clears the selection, so that 1 and 2 preview around the split point.
   if (jump && i >= 0) {
     const f = cueToFrame(S.cues[i]);
     S.sel = { a: f, b: f };
@@ -1012,15 +1012,15 @@ window.addEventListener("keydown", (e) => {
     case "F8":
       preview(Number(code[1]) - 5);
       break;
+    // 1 2 listen before / from the selection start, 3 4 move the selection:
+    // everything needed to refine a split point sits under four fingers.
     case "Digit1":
     case "Digit2":
-    case "Digit3":
-    case "Digit4":
       preview(Number(code[5]) - 1);
       break;
-    case "Digit5":
-    case "Digit6":
-      nudgeSelection((code === "Digit5" ? -1 : 1) * (e.shiftKey ? 10 : 1) * (S.sr / CUE_FPS));
+    case "Digit3":
+    case "Digit4":
+      nudgeSelection((code === "Digit3" ? -1 : 1) * (e.shiftKey ? 10 : 1) * (S.sr / CUE_FPS));
       break;
     case "Digit0":
       setView(0, maxSpp());

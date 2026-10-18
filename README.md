@@ -36,13 +36,14 @@ removed; the editor moves existing split points only.
 | Key | Action |
 | --- | --- |
 | Space | Play / stop from the cursor |
-| 1 2 3 4 (F5–F8) | Play the preview length before / from the selection start, before / from the selection end |
+| 1 2 (F5 F6) | Play the preview length before / from the selection start |
+| 3 4 (, .) | Move the selection by one cue frame; with ⇧, ten |
+| F7 F8 | Play the preview length before / from the selection end |
 | ← → | Move the cursor by the small step (1 s) |
 | ⌥← ⌥→, PageUp PageDown | Move the cursor by the large step (15 s) |
 | ⇧← ⇧→ | Move the cursor by one cue frame (1/75 s) |
 | ↑ ↓ | Cursor to the selection start / end; to the start / end of the file when nothing is selected |
-| [ ] | Cursor to the previous / next split point and select it; clears the selection, so 1–4 preview around the split point |
-| , . (5 6) | Move the selection by one cue frame; with ⇧, ten |
+| [ ] | Cursor to the previous / next split point and select it; clears the selection, so 1 and 2 preview around the split point |
 | M / ⇧M | Move the selected split point to the selection start / end |
 | I O (= −) | Zoom in / out |
 | 0 | Show the whole file |
@@ -70,7 +71,7 @@ unless that shortcut is turned off in System Settings.
 | Click / drag the overview | Move the cursor there (the selection is kept); playback continues from it |
 
 A typical refinement: drag over the transition, check it with 1 and 2, adjust
-the selection with `,` and `.`, then press M to put the split point on the
+the selection with 3 and 4, then press M to put the split point on the
 selection start.
 
 The step sizes and the preview length can be changed in the help dialog (`?`);
