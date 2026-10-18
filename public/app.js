@@ -59,7 +59,16 @@ class Player {
   }
 
   ensureContext() {
-    if (!this.ctx) this.ctx = new AudioContext({ sampleRate: S.sr, latencyHint: "interactive" });
+    if (!this.ctx) {
+      this.ctx = new AudioContext({ sampleRate: S.sr, latencyHint: "interactive" });
+      // Chrome detaches a context that outputs pure silence from the real
+      // device, and re-attaching (especially to Bluetooth) delays the next
+      // sound by a second or two. An inaudible offset keeps the device open.
+      const keepAlive = this.ctx.createConstantSource();
+      keepAlive.offset.value = 1e-5; // -100 dBFS
+      keepAlive.connect(this.ctx.destination);
+      keepAlive.start();
+    }
     if (this.ctx.state === "suspended") this.ctx.resume();
     return this.ctx;
   }
@@ -132,8 +141,11 @@ class Player {
   position() {
     if (!this.playing) return null;
     if (this.startTime === null) return this.from;
+    // contextTime is the time of the sample leaving the device right now.
+    const out = this.ctx.getOutputTimestamp?.().contextTime;
     const latency = (this.ctx.outputLatency || 0) + (this.ctx.baseLatency || 0);
-    const t = this.ctx.currentTime - latency - this.startTime;
+    const now = out > 0 ? out : this.ctx.currentTime - latency;
+    const t = now - this.startTime;
     return clamp(this.from + Math.round(t * S.sr), this.from, this.to);
   }
 
@@ -932,6 +944,17 @@ window.addEventListener("beforeunload", (e) => {
   if (isDirty()) e.preventDefault();
 });
 window.addEventListener("pagehide", () => navigator.sendBeacon("/api/bye"));
+
+// Open the audio device on the first gesture (autoplay rules require one), so
+// that the first Space does not wait for it. Release it while the tab is hidden.
+for (const type of ["pointerdown", "keydown"]) {
+  window.addEventListener(type, () => player.ensureContext(), { once: true, capture: true });
+}
+document.addEventListener("visibilitychange", () => {
+  if (!player.ctx) return;
+  if (document.hidden && !player.playing) player.ctx.suspend();
+  else if (!document.hidden) player.ctx.resume();
+});
 window.addEventListener("resize", resize);
 
 // ---------------------------------------------------------------- start
