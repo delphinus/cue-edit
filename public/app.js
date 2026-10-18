@@ -33,6 +33,16 @@ const cueToFrame = (c) => Math.round((c * S.sr) / CUE_FPS);
 const frameToCue = (f) => Math.floor((f * CUE_FPS) / S.sr + 1e-9);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const secs = (s) => Math.round(s * S.sr);
+// Selection edges sit on cue frames (1/75 s), the only positions an INDEX can
+// hold, so that a split point put on the selection lines up with it exactly.
+const snap = (f) => clamp(cueToFrame(Math.round((f * CUE_FPS) / S.sr)), 0, S.frames);
+function selectRange(x, y) {
+  if (x === y) return { a: x, b: x };
+  const a = snap(Math.min(x, y));
+  // A drag shorter than one cue frame still selects one.
+  const b = Math.max(snap(Math.max(x, y)), Math.min(S.frames, cueToFrame(frameToCue(a) + 1)));
+  return { a, b };
+}
 
 function fmtTime(f) {
   const t = Math.max(0, f) / S.sr;
@@ -259,8 +269,8 @@ function neighbourCue(dir) {
 function nudgeSelection(frames) {
   if (S.sel.b > S.sel.a) {
     const len = S.sel.b - S.sel.a;
-    const a = clamp(S.sel.a + frames, 0, S.frames - len);
-    S.sel = { a, b: a + len };
+    const a = snap(clamp(S.sel.a + frames, 0, S.frames - len));
+    S.sel = { a, b: snap(a + len) };
     S.pos = a;
     ensureVisible(a);
     draw();
@@ -272,8 +282,11 @@ function nudgeSelection(frames) {
 const isDirty = () => S.cues.some((c, i) => c !== S.saved[i]);
 
 async function save() {
-  if (!isDirty()) return;
-  setStatus("Saving…");
+  if (!isDirty()) {
+    toast("Nothing to save");
+    return;
+  }
+  const changed = S.cues.filter((c, i) => c !== S.saved[i]).length;
   const res = await fetch("/api/save", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -281,20 +294,23 @@ async function save() {
   });
   const body = await res.json();
   if (!res.ok) {
-    setStatus(`Save failed: ${body.error}`);
+    toast(`Save failed: ${body.error}`, { error: true });
     return;
   }
   S.saved = [...S.cues];
-  setStatus(`Saved ${new Date().toLocaleTimeString()}`);
+  toast(`Saved ${S.cueName} (${changed} split point${changed === 1 ? "" : "s"} changed)`);
   renderTracks();
   draw();
 }
 
-let statusTimer;
-function setStatus(text) {
-  $("status").textContent = text;
-  clearTimeout(statusTimer);
-  statusTimer = setTimeout(() => ($("status").textContent = ""), 6000);
+let toastTimer;
+function toast(text, { error = false } = {}) {
+  const el = $("toast");
+  el.textContent = text;
+  el.classList.toggle("error", error);
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), error ? 8000 : 2500);
 }
 
 // ---------------------------------------------------------------- view
@@ -700,7 +716,7 @@ overlay.addEventListener("pointerdown", (e) => {
   if (e.shiftKey && S.sel.b > S.sel.a) {
     const anchor = Math.abs(f - S.sel.a) < Math.abs(f - S.sel.b) ? S.sel.b : S.sel.a;
     S.drag = { kind: "select", anchor, x: e.clientX, moved: true };
-    S.sel = { a: Math.min(anchor, f), b: Math.max(anchor, f) };
+    S.sel = selectRange(anchor, f);
   } else {
     // The selection is left alone until the pointer moves or is released, so
     // that a click inside it keeps it (see clickAt).
@@ -721,7 +737,7 @@ overlay.addEventListener("pointermove", (e) => {
   } else if (d.kind === "select") {
     if (Math.abs(e.clientX - d.x) > 2) d.moved = true;
     if (!d.moved) return;
-    S.sel = { a: Math.min(d.anchor, f), b: Math.max(d.anchor, f) };
+    S.sel = selectRange(d.anchor, f);
     S.pos = S.sel.a;
   }
   renderTracksSoon();
@@ -990,7 +1006,8 @@ document.addEventListener("visibilitychange", () => {
   if (document.hidden && !player.playing) player.ctx.suspend();
   else if (!document.hidden) player.ctx.resume();
 });
-window.addEventListener("resize", resize);
+// The header may wrap onto two lines, so watch the waveform box itself.
+new ResizeObserver(() => resize()).observe($("wave-box"));
 
 // ---------------------------------------------------------------- start
 
@@ -1017,6 +1034,7 @@ async function load() {
   S.peaks = new Int8Array(await (await fetch("/api/peaks")).arrayBuffer());
   $("title").textContent = [info.performer, info.title].filter(Boolean).join(" – ") || info.cueName;
   $("files").textContent = `${info.cueName} · ${info.audioName} · ${fmtTime(info.frames)}`;
+  $("files").parentElement.title = `${info.cuePath}\n${info.audioName}`;
   $("loading").remove();
   S.ready = true;
   resize();

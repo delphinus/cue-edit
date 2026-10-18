@@ -24,11 +24,14 @@ body {
 body {
   display: grid;
   grid-template-rows: auto 44px 46px 1fr minmax(120px, 28vh);
+  /* Without this the column grows to its content (long names, canvases). */
+  grid-template-columns: minmax(0, 1fr);
   overflow: hidden;
 }
 
 header {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 16px;
@@ -36,7 +39,11 @@ header {
   background: var(--panel);
 }
 
+/* Long file names are cut short so that the readout and the buttons stay
+   visible; the readout wraps onto a second line in narrow windows. */
 .names {
+  flex: 1 1 200px;
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -48,11 +55,25 @@ header {
 }
 
 .readout {
+  flex: none;
+  margin-left: auto;
   display: flex;
   gap: 14px;
   align-items: center;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+
+/* Fixed widths keep the readout from changing size (and re-wrapping the
+   header) as the values change. */
+#pos {
+  display: inline-block;
+  min-width: 20ch;
+}
+
+#sel {
+  display: inline-block;
+  min-width: 31ch;
 }
 
 .dim {
@@ -191,4 +212,28 @@ dialog h2 {
   background: var(--bg);
   color: var(--fg);
   border: 1px solid #3a404c;
+}
+
+#toast {
+  position: fixed;
+  top: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  border-radius: 6px;
+  background: #2d5a3a;
+  color: #fff;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s;
+  z-index: 10;
+}
+
+#toast.show {
+  opacity: 1;
+}
+
+#toast.error {
+  background: #8a2f2f;
 }

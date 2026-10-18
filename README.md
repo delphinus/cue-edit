@@ -47,7 +47,7 @@ removed; the editor moves existing split points only.
 | I O (= −) | Zoom in / out |
 | 0 | Show the whole file |
 | ⌘Z ⇧⌘Z | Undo / redo |
-| ⌘S | Save |
+| ⌘S | Save (a notification confirms it) |
 | Esc | Cancel a drag, clear the selection |
 | ? | Help and settings |
 
@@ -79,8 +79,9 @@ they are kept in the browser's local storage.
 
 - During playback the playhead stays in the centre and the waveform scrolls
   under it.
-- Split points are stored in cue frames (1/75 s). A point placed from the
-  selection is rounded down to the cue frame at or before it.
+- Split points are stored in cue frames (1/75 s), the resolution of a cue
+  sheet. Selection edges snap to cue frames for the same reason, so a split
+  point put on the selection lines up with it exactly.
 - The Δ column shows how far each split point has moved since the sheet was
   opened, in seconds.
 
