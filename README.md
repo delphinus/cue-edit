@@ -44,7 +44,7 @@ removed; the editor moves existing split points only.
 | [ ] | Cursor to the previous / next split point and select it |
 | , . (5 6) | Move the selection by one cue frame; with ⇧, ten |
 | M / ⇧M | Move the selected split point to the selection start / end |
-| O I (= −) | Zoom in / out |
+| I O (= −) | Zoom in / out |
 | 0 | Show the whole file |
 | ⌘Z ⇧⌘Z | Undo / redo |
 | ⌘S | Save |

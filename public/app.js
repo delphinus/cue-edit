@@ -860,10 +860,10 @@ window.addEventListener("keydown", (e) => {
     case "Digit0":
       setView(0, maxSpp());
       break;
-    case "KeyO":
+    case "KeyI":
       zoomKey(0.5);
       break;
-    case "KeyI":
+    case "KeyO":
       zoomKey(2);
       break;
     case "KeyM": {
