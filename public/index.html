@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>cue-edit</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header>
+      <div class="names">
+        <span id="title"></span>
+        <span id="files" class="dim"></span>
+      </div>
+      <div class="readout">
+        <span>Pos <b id="pos">-</b></span>
+        <span>Sel <b id="sel">-</b></span>
+        <span>View <b id="zoom">-</b></span>
+        <span id="status" class="dim"></span>
+        <button id="save" disabled title="Save (⌘S)">Save</button>
+        <button id="help-button" title="Help (?)">?</button>
+      </div>
+    </header>
+    <canvas id="overview"></canvas>
+    <canvas id="strip"></canvas>
+    <div id="wave-box">
+      <canvas id="wave"></canvas>
+      <canvas id="overlay"></canvas>
+      <div id="loading">Decoding…</div>
+    </div>
+    <div id="tracks">
+      <table>
+        <thead>
+          <tr><th>#</th><th>INDEX</th><th>Δ</th><th>Title</th></tr>
+        </thead>
+        <tbody id="track-rows"></tbody>
+      </table>
+    </div>
+    <dialog id="help">
+      <h2>Keys</h2>
+      <table class="keys">
+        <tr><th>Space</th><td>Play / stop from the cursor</td></tr>
+        <tr><th>1 2 3 4 <span class="dim">(F5–F8)</span></th><td>Play the preview length before / from the selection start, before / from the selection end</td></tr>
+        <tr><th>← →</th><td>Move the cursor by the small step</td></tr>
+        <tr><th>⌥← ⌥→ <span class="dim">(PageUp/Down)</span></th><td>Move the cursor by the large step</td></tr>
+        <tr><th>⇧← ⇧→</th><td>Move the cursor by one cue frame (1/75 s)</td></tr>
+        <tr><th>↑ ↓</th><td>Cursor to selection start / end</td></tr>
+        <tr><th>[ ]</th><td>Cursor to the previous / next split point and select it</td></tr>
+        <tr><th>, . <span class="dim">(5 6)</span></th><td>Move the selection by one cue frame (with ⇧: ten)</td></tr>
+        <tr><th>M <span class="dim">/ ⇧M</span></th><td>Move the selected split point to the selection start / end</td></tr>
+        <tr><th>O I <span class="dim">(= −)</span></th><td>Zoom in / out (pinch also works)</td></tr>
+        <tr><th>0</th><td>Show the whole file</td></tr>
+        <tr><th>⌘Z ⇧⌘Z</th><td>Undo / redo split point edits</td></tr>
+        <tr><th>⌘S</th><td>Save (only INDEX 01 lines change; a .bak is kept)</td></tr>
+        <tr><th>Esc</th><td>Cancel a drag, clear the selection</td></tr>
+      </table>
+      <h2>Mouse / trackpad</h2>
+      <table class="keys">
+        <tr><th>Drag</th><td>Select a range (⇧-click extends it)</td></tr>
+        <tr><th>Drag a handle</th><td>Move a split point (handles are the numbered marks above the waveform)</td></tr>
+        <tr><th>⌥-drag / right-drag</th><td>Move the split point nearest to where the drag starts</td></tr>
+        <tr><th>↑ ↓ while dragging</th><td>Drop the split point on the selection start / end</td></tr>
+        <tr><th>Two-finger scroll</th><td>Scroll; pinch to zoom</td></tr>
+      </table>
+      <h2>Settings</h2>
+      <form id="settings" class="settings">
+        <label>Small step <input name="small" type="number" min="0.01" step="0.01" /> s</label>
+        <label>Large step <input name="large" type="number" min="0.1" step="0.1" /> s</label>
+        <label>Preview <input name="preview" type="number" min="0.1" step="0.1" /> s</label>
+      </form>
+      <form method="dialog"><button>Close</button></form>
+    </dialog>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
