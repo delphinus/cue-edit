@@ -79,6 +79,8 @@ they are kept in the browser's local storage.
 
 - During playback the playhead stays in the centre and the waveform scrolls
   under it.
+- Clicks and drags in the waveform do not interrupt playback; clicking the
+  overview jumps playback there.
 - Split points are stored in cue frames (1/75 s), the resolution of a cue
   sheet. Selection edges snap to cue frames for the same reason, so a split
   point put on the selection lines up with it exactly.

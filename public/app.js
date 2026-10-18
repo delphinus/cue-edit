@@ -204,10 +204,10 @@ function preview(which) {
   draw();
 }
 
-// Jumps the cursor; keeps normal playback going from the new place.
-function setPos(f, { follow = true } = {}) {
+// Jumps the cursor; with `restart`, normal playback continues from there.
+function setPos(f, { follow = true, restart = true } = {}) {
   S.pos = clamp(Math.round(f), 0, S.frames);
-  if (player.playing && !player.preview) player.play(S.pos, S.frames, { onEnd: () => (S.pos = S.frames) });
+  if (restart && player.playing && !player.preview) player.play(S.pos, S.frames, { onEnd: () => (S.pos = S.frames) });
   if (follow) ensureVisible(S.pos);
   draw();
 }
@@ -754,18 +754,19 @@ overlay.addEventListener("pointerup", () => {
   if (!d) return;
   if (d.kind === "cue") return endCueDrag(true);
   S.drag = null;
-  if (!d.moved) return clickAt(d.anchor);
+  // Editing in the waveform leaves playback running where it is.
+  if (!d.moved) return clickAt(d.anchor, { restart: false });
   // A new selection usually brackets a transition: pick the split point
   // nearest to it so that M (or ↑ while dragging) acts on it right away.
   S.selectedCue = nearestCue(S.sel.a);
   renderTracks();
-  setPos(S.sel.a, { follow: false });
+  setPos(S.sel.a, { follow: false, restart: false });
 });
 
 // A click moves the cursor; outside the selection it also clears it.
-function clickAt(f) {
+function clickAt(f, { restart = true } = {}) {
   if (f < S.sel.a || f > S.sel.b) S.sel = { a: f, b: f };
-  setPos(f, { follow: false });
+  setPos(f, { follow: false, restart });
 }
 
 let renderQueued = false;
@@ -792,7 +793,7 @@ strip.addEventListener("pointerdown", (e) => {
     }
   });
   if (hit >= 0) startCueDrag(hit, e, strip);
-  else if (e.button === 0) clickAt(frameAtX(x));
+  else if (e.button === 0) clickAt(frameAtX(x), { restart: false });
 });
 strip.addEventListener("pointermove", (e) => {
   if (S.drag?.kind !== "cue") return;
