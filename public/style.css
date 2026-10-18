@@ -23,7 +23,7 @@ body {
 
 body {
   display: grid;
-  grid-template-rows: auto 44px 38px 1fr minmax(120px, 28vh);
+  grid-template-rows: auto 60px 38px 1fr minmax(120px, 28vh);
   /* Without this the column grows to its content (long names, canvases). */
   grid-template-columns: minmax(0, 1fr);
   overflow: hidden;

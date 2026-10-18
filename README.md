@@ -84,9 +84,10 @@ they are kept in the browser's local storage.
 - Split points are stored in cue frames (1/75 s), the resolution of a cue
   sheet. Selection edges snap to cue frames for the same reason, so a split
   point put on the selection lines up with it exactly.
-- As in mp3DirectCut, the waveform is overlaid with each track's number and
-  the time elapsed since its split point along the top, and "Artist - Title"
-  along the bottom.
+- As in mp3DirectCut, the overview carries each track's title, and the
+  waveform shows the track at the cursor (or the playhead) with the time
+  elapsed since its split point in large type, plus the album and
+  "Artist - Title" at the bottom.
 - The waveform is drawn at the same resolution: one bar per cue frame when
   zoomed in, and zooming stops once a cue frame is 32 px wide.
 - The Δ column shows how far each split point has moved since the sheet was

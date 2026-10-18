@@ -466,7 +466,7 @@ function drawOverview() {
     const spp = S.frames / c.width;
     const mid = c.height / 2;
     const scale = (c.height / 2 - 2) / 128;
-    o.fillStyle = "#3d6a94";
+    o.fillStyle = "#2b4a68";
     for (let x = 0; x < c.width; x++) {
       const r = frameRange(x * spp, (x + 1) * spp);
       if (!r) continue;
@@ -475,6 +475,7 @@ function drawOverview() {
   }
   g.clearRect(0, 0, c.width, c.height);
   g.drawImage(overviewImage, 0, 0);
+  g.drawImage(overviewTitles(c), 0, 0);
   const k = c.width / S.frames;
   g.fillStyle = "rgba(255,255,255,0.12)";
   g.strokeStyle = "rgba(255,255,255,0.5)";
@@ -489,6 +490,58 @@ function drawOverview() {
   const ph = head;
   g.fillStyle = ph !== null ? COLORS.playhead : COLORS.cursor;
   g.fillRect(Math.round((ph ?? S.pos) * k), 0, 1, c.height);
+}
+
+// Track titles written into their spans of the overview, wrapped to the span
+// width as mp3DirectCut does. Cached until a split point moves or it resizes.
+let titlesCache = { key: "", canvas: null };
+function overviewTitles(c) {
+  const key = `${c.width}x${c.height}:${S.cues.join(",")}`;
+  if (titlesCache.key === key) return titlesCache.canvas;
+  const canvas = document.createElement("canvas");
+  canvas.width = c.width;
+  canvas.height = c.height;
+  const g = canvas.getContext("2d");
+  const d = dpr();
+  const size = 11 * d;
+  const lineH = Math.round(size * 1.2);
+  const maxLines = Math.max(1, Math.floor((c.height - 4 * d) / lineH));
+  g.font = `${size}px -apple-system, sans-serif`;
+  g.fillStyle = COLORS.text;
+  g.textBaseline = "top";
+  const k = c.width / S.frames;
+  S.cues.forEach((cue, i) => {
+    const x0 = cueToFrame(cue) * k + 3 * d;
+    const x1 = (i + 1 < S.cues.length ? cueToFrame(S.cues[i + 1]) : S.frames) * k - 2 * d;
+    const t = S.tracks[i];
+    const lines = wrapText(g, t.title || t.performer || trackNumber(t), x1 - x0, maxLines);
+    lines.forEach((line, n) => g.fillText(line, x0, 2 * d + n * lineH));
+  });
+  titlesCache = { key, canvas };
+  return canvas;
+}
+
+// Breaks `text` into at most `maxLines` lines of `width`; the last line is
+// shortened with an ellipsis if text remains.
+function wrapText(g, text, width, maxLines) {
+  if (width < g.measureText("W").width) return [];
+  const lines = [];
+  let rest = text.trim();
+  while (rest && lines.length < maxLines) {
+    if (lines.length === maxLines - 1 || g.measureText(rest).width <= width) {
+      const line = fitText(g, rest, width);
+      if (line) lines.push(line);
+      break;
+    }
+    // Longest prefix that fits, preferably ending at a space.
+    let n = 1;
+    while (n < rest.length && g.measureText(rest.slice(0, n + 1)).width <= width) n++;
+    const space = rest.lastIndexOf(" ", n);
+    const cut = space > 0 ? space : n;
+    lines.push(rest.slice(0, cut));
+    rest = rest.slice(cut).trimStart();
+  }
+  return lines;
 }
 
 function cueColor(i) {
@@ -580,46 +633,34 @@ function drawOverlay() {
   }
 }
 
-// Labels drawn over the waveform, as mp3DirectCut does: along the top, the
-// track number and the time elapsed since its split point at each tick;
-// along the bottom, "Artist - Title" of each track.
+// Big labels over the waveform, as mp3DirectCut shows them: the track at the
+// cursor (or the playhead) and the time elapsed since its split point at the
+// top left, the album and "Artist - Title" at the bottom left.
 function drawTrackLabels(g, c, d) {
-  const step = TICKS.find((t) => (t * S.sr) / S.view.spp / d >= 90) ?? TICKS.at(-1);
-  const stepFrames = step * S.sr;
+  const at = head ?? S.pos;
+  let i = 0;
+  while (i + 1 < S.cues.length && cueToFrame(S.cues[i + 1]) <= at) i++;
+  const t = S.tracks[i];
+  const elapsed = Math.max(0, at - cueToFrame(S.cues[i])) / S.sr;
+  const min = Math.floor(elapsed / 60);
+  const sec = (elapsed % 60).toFixed(2).padStart(5, "0");
+  const cssH = c.height / d;
+  const big = clamp(cssH * 0.2, 24, 96) * d;
+  const small = clamp(cssH * 0.06, 13, 28) * d;
+  const pad = 10 * d;
   g.save();
-  g.font = `${11 * d}px -apple-system, sans-serif`;
-  g.shadowColor = "rgba(0, 0, 0, 0.9)";
-  g.shadowBlur = 3 * d;
-  S.cues.forEach((cue, i) => {
-    const from = cueToFrame(cue);
-    const to = i + 1 < S.cues.length ? cueToFrame(S.cues[i + 1]) : S.frames;
-    if (to < S.view.start || from > viewEnd()) return;
-    const endX = xOf(to) - 4 * d;
-    const t = S.tracks[i];
-
-    g.textBaseline = "top";
-    for (let k = Math.max(0, Math.floor((S.view.start - from) / stepFrames)); ; k++) {
-      const f = from + k * stepFrames;
-      if (f >= to || f > viewEnd()) break;
-      const x = Math.round(xOf(f));
-      const elapsed = fmtTime(secs(k * step));
-      const label = `${trackNumber(t)} ${step < 1 ? elapsed : elapsed.replace(/\.000$/, "")}`;
-      // Leave room for the next track's own first label.
-      if (x + 3 * d + g.measureText(label).width > endX) continue;
-      g.fillStyle = COLORS.dim;
-      g.fillRect(x, 0, d, 6 * d);
-      g.fillStyle = COLORS.text;
-      g.fillText(label, x + 3 * d, 3 * d);
-    }
-
-    // The name of a track whose split point has scrolled off sticks to the left.
-    const start = Math.max(xOf(from) + 4 * d, 4 * d);
-    const text = fitText(g, trackName(t), endX - start);
-    if (text) {
-      g.textBaseline = "bottom";
-      g.fillText(text, start, c.height - 4 * d);
-    }
-  });
+  g.shadowColor = "rgba(0, 0, 0, 0.8)";
+  g.shadowBlur = 4 * d;
+  g.textBaseline = "top";
+  g.font = `600 ${big}px -apple-system, sans-serif`;
+  g.fillStyle = "#ffe066";
+  g.fillText(`${trackNumber(t)} > ${min}'${sec}`, pad, pad * 0.6);
+  g.textBaseline = "bottom";
+  g.font = `${small}px -apple-system, sans-serif`;
+  g.fillStyle = "rgba(216, 219, 226, 0.85)";
+  const width = c.width - 2 * pad;
+  g.fillText(fitText(g, trackName(t), width), pad, c.height - pad * 0.6);
+  if (S.album) g.fillText(fitText(g, S.album, width), pad, c.height - pad * 0.6 - small * 1.25);
   g.restore();
 }
 
@@ -1070,6 +1111,7 @@ async function load() {
   S.loaded = [...S.cues];
   S.saved = [...S.cues];
   S.cueName = info.cueName;
+  S.album = info.title;
   S.peaks = new Int8Array(await (await fetch("/api/peaks")).arrayBuffer());
   $("title").textContent = [info.performer, info.title].filter(Boolean).join(" – ") || info.cueName;
   $("files").textContent = `${info.cueName} · ${info.audioName} · ${fmtTime(info.frames)}`;
