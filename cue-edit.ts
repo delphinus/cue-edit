@@ -184,6 +184,18 @@ function scheduleExit() {
   }, 3000);
 }
 
+// The bye beacon is not always delivered (a closed Safari tab left the server
+// running), so the page also pings while it is open. Background tabs throttle
+// timers to about once a minute, hence the generous limit.
+const PING_LIMIT_MS = 5 * 60 * 1000;
+let lastSeen = Date.now();
+setInterval(() => {
+  if (Date.now() - lastSeen > PING_LIMIT_MS) {
+    console.error("no word from the page; exiting");
+    process.exit(0);
+  }
+}, 10 * 1000);
+
 const publicDir = join(import.meta.dir, "public");
 const json = (data: unknown, status = 200) => Response.json(data, { status });
 
@@ -192,11 +204,16 @@ const server = Bun.serve({
   hostname: "127.0.0.1",
   async fetch(req) {
     const url = new URL(req.url);
-    if (byeTimer && url.pathname.startsWith("/api/")) {
-      clearTimeout(byeTimer);
-      byeTimer = null;
+    if (url.pathname.startsWith("/api/") && url.pathname !== "/api/bye") {
+      lastSeen = Date.now();
+      if (byeTimer) {
+        clearTimeout(byeTimer);
+        byeTimer = null;
+      }
     }
     switch (url.pathname) {
+      case "/api/ping":
+        return new Response(null, { status: 204 });
       case "/":
         return new Response(Bun.file(join(publicDir, "index.html")));
       case "/api/info": {

@@ -1105,6 +1105,8 @@ window.addEventListener("beforeunload", (e) => {
   if (isDirty()) e.preventDefault();
 });
 window.addEventListener("pagehide", () => navigator.sendBeacon("/api/bye"));
+// Keep the server alive while the page is open; it exits when the pings stop.
+setInterval(() => fetch("/api/ping", { method: "POST" }).catch(() => {}), 30 * 1000);
 
 // Open the audio device on the first gesture (autoplay rules require one), so
 // that the first Space does not wait for it. Release it while the tab is hidden.
