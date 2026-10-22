@@ -208,16 +208,25 @@ function scheduleExit() {
 }
 
 // The bye beacon is not always delivered (a closed Safari tab left the server
-// running), so the page also pings while it is open. Background tabs throttle
-// timers to about once a minute, hence the generous limit.
-const PING_LIMIT_MS = 5 * 60 * 1000;
+// running), so the page also pings while it is open. A hidden page cannot be
+// relied on to ping at all: Safari stops the timers of background tabs, and
+// the server used to exit under a page that was merely in the background. The
+// page therefore says when it is hidden, and the server then waits much
+// longer. Both limits can be shortened for tests.
+const limit = (name: string, fallback: number) => Number(process.env[name]) || fallback;
+const PING_LIMIT_MS = limit("CUE_EDIT_PING_LIMIT_MS", 5 * 60 * 1000);
+const HIDDEN_LIMIT_MS = limit("CUE_EDIT_HIDDEN_LIMIT_MS", 12 * 60 * 60 * 1000);
 let lastSeen = Date.now();
-setInterval(() => {
-  if (Date.now() - lastSeen > PING_LIMIT_MS) {
-    console.error("no word from the page; exiting");
-    process.exit(0);
-  }
-}, 10 * 1000);
+let pageHidden = false;
+setInterval(
+  () => {
+    if (Date.now() - lastSeen > (pageHidden ? HIDDEN_LIMIT_MS : PING_LIMIT_MS)) {
+      console.error(`no word from the ${pageHidden ? "hidden " : ""}page; exiting`);
+      process.exit(0);
+    }
+  },
+  Math.min(10 * 1000, PING_LIMIT_MS / 4),
+);
 
 const publicDir = join(import.meta.dir, "public");
 const json = (data: unknown, status = 200) => Response.json(data, { status });
@@ -236,6 +245,8 @@ const server = Bun.serve({
     }
     switch (url.pathname) {
       case "/api/ping":
+        // ?hidden=1 when the page goes to the background, 0 when it is back.
+        pageHidden = url.searchParams.get("hidden") === "1";
         return new Response(null, { status: 204 });
       case "/":
         return new Response(Bun.file(join(publicDir, "index.html")));

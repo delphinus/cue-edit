@@ -75,9 +75,19 @@ export async function makeFixture(sheet = SHEET): Promise<Fixture> {
 
 export type Server = { url: string; proc: Subprocess; stop: () => Promise<void> };
 
-// Starts cue-edit on a free port and waits for it to report its URL.
-export async function startServer(cue: string): Promise<Server> {
-  const proc = Bun.spawn(["bun", join(ROOT, "cue-edit.ts"), cue, "--no-open"], { stderr: "pipe", stdout: "ignore" });
+// Resolves to true if the process exits within `ms`.
+export async function exitsWithin(proc: Subprocess, ms: number): Promise<boolean> {
+  return Promise.race([proc.exited.then(() => true), Bun.sleep(ms).then(() => false)]);
+}
+
+// Starts cue-edit on a free port and waits for it to report its URL. `env`
+// can shorten the keep-alive limits (CUE_EDIT_PING_LIMIT_MS and friends).
+export async function startServer(cue: string, env: Record<string, string> = {}): Promise<Server> {
+  const proc = Bun.spawn(["bun", join(ROOT, "cue-edit.ts"), cue, "--no-open"], {
+    stderr: "pipe",
+    stdout: "ignore",
+    env: { ...process.env, ...env },
+  });
   const reader = proc.stderr.getReader();
   const decoder = new TextDecoder();
   let log = "";

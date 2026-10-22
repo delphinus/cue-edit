@@ -289,11 +289,17 @@ async function save() {
     return;
   }
   const changed = S.cues.filter((c, i) => c !== S.saved[i]).length;
-  const res = await fetch("/api/save", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ indexes: S.cues }),
-  });
+  let res;
+  try {
+    res = await fetch("/api/save", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ indexes: S.cues }),
+    });
+  } catch {
+    serverLost();
+    return;
+  }
   const body = await res.json();
   if (!res.ok) {
     toast(`Save failed: ${body.error}`, { error: true });
@@ -306,13 +312,25 @@ async function save() {
 }
 
 let toastTimer;
-function toast(text, { error = false } = {}) {
+function toast(text, { error = false, sticky = false } = {}) {
   const el = $("toast");
   el.textContent = text;
   el.classList.toggle("error", error);
   el.classList.add("show");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove("show"), error ? 8000 : 2500);
+  if (!sticky) toastTimer = setTimeout(() => el.classList.remove("show"), error ? 8000 : 2500);
+}
+
+// The server is gone (it exited, or was stopped): nothing can be saved from
+// this page any more, so say so until the page is reloaded.
+let lost = false;
+function serverLost() {
+  if (lost) return;
+  lost = true;
+  const unsaved = S.cues.filter((c, i) => c !== S.saved[i]).length;
+  const note = unsaved ? ` ${unsaved} unsaved split point${unsaved === 1 ? "" : "s"} cannot be saved.` : "";
+  toast(`The cue-edit server has stopped.${note} Start cue-edit again and reload.`, { error: true, sticky: true });
+  document.title = `⚠ ${S.cueName ?? "cue-edit"}`;
 }
 
 // ---------------------------------------------------------------- view
@@ -692,7 +710,7 @@ function updateReadout() {
   $("zoom").textContent = `${((viewEnd() - S.view.start) / S.sr).toFixed(2)} s`;
   const dirty = isDirty();
   $("save").disabled = !dirty;
-  document.title = `${dirty ? "● " : ""}${S.cueName ?? "cue-edit"}`;
+  document.title = `${lost ? "⚠ " : dirty ? "● " : ""}${S.cueName ?? "cue-edit"}`;
 }
 
 let currentRow = -1;
@@ -1106,7 +1124,23 @@ window.addEventListener("beforeunload", (e) => {
 });
 window.addEventListener("pagehide", () => navigator.sendBeacon("/api/bye"));
 // Keep the server alive while the page is open; it exits when the pings stop.
-setInterval(() => fetch("/api/ping", { method: "POST" }).catch(() => {}), 30 * 1000);
+// A hidden page may not ping at all (Safari stops the timers of background
+// tabs), so it tells the server when it goes to the background, which then
+// waits much longer, and pings as soon as it is back.
+function ping() {
+  const url = `/api/ping?hidden=${document.hidden ? 1 : 0}`;
+  if (document.hidden) {
+    navigator.sendBeacon(url);
+    return;
+  }
+  fetch(url, { method: "POST" })
+    .then((res) => {
+      if (!res.ok) throw new Error(res.statusText);
+    })
+    .catch(serverLost);
+}
+setInterval(ping, 30 * 1000);
+document.addEventListener("visibilitychange", ping);
 
 // Open the audio device on the first gesture (autoplay rules require one), so
 // that the first Space does not wait for it. Release it while the tab is hidden.

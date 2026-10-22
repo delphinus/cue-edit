@@ -28,6 +28,12 @@ directory (about 5 seconds for a 70-minute mix), then the page opens in the
 default browser. The server exits a few seconds after the page is closed and
 removes its temporary files.
 
+If the browser does not report the closing, the server exits after five
+minutes without a word from a visible page, or twelve hours when the page was
+last seen going to the background (Safari stops the timers of background tabs,
+so a hidden page cannot keep pinging). Should the server stop while the page
+is open, the page says so and how many split points are unsaved.
+
 Only sheets with a single `FILE` line are supported. Tracks cannot be added or
 removed; the editor moves existing split points only.
 

@@ -8,6 +8,7 @@ import {
   type Server,
   SHEET,
   STARTUP_INDEXES,
+  exitsWithin,
   indexesOf,
   makeFixture,
   startServer,
@@ -174,5 +175,31 @@ describe("static files", () => {
     expect(icon.status).toBe(200);
     expect(icon.headers.get("content-type")).toStartWith("image/svg+xml");
     expect(await icon.text()).toStartWith("<svg");
+  });
+});
+
+describe("lifetime", () => {
+  const SHORT = { CUE_EDIT_PING_LIMIT_MS: "1200", CUE_EDIT_HIDDEN_LIMIT_MS: "60000" };
+  const ping = (hidden: 0 | 1) => fetch(`${server!.url}api/ping?hidden=${hidden}`, { method: "POST" });
+
+  test("exits when a visible page stops pinging", async () => {
+    fixture = await makeFixture();
+    server = await startServer(fixture.cue, SHORT);
+    expect(await exitsWithin(server.proc, 3000)).toBe(true);
+  });
+
+  test("waits for a hidden page, and stops waiting once it is back", async () => {
+    fixture = await makeFixture();
+    server = await startServer(fixture.cue, SHORT);
+    expect((await ping(1)).status).toBe(204);
+    expect(await exitsWithin(server.proc, 3000)).toBe(false);
+    await ping(0);
+    expect(await exitsWithin(server.proc, 3000)).toBe(true);
+  }, 15000);
+
+  test("exits soon after the page says goodbye", async () => {
+    await open();
+    await fetch(`${server!.url}api/bye`, { method: "POST" });
+    expect(await exitsWithin(server!.proc, 5000)).toBe(true);
   });
 });

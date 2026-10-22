@@ -3,7 +3,7 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { type Browser, type Page, chromium } from "playwright";
-import { type Fixture, type Server, STARTUP_INDEXES, indexesOf, makeFixture, startServer } from "./helpers";
+import { type Fixture, type Server, STARTUP_INDEXES, exitsWithin, indexesOf, makeFixture, startServer } from "./helpers";
 
 let browser: Browser;
 let fixture: Fixture;
@@ -140,4 +140,40 @@ describe("editing", () => {
     // Stops one cue frame before the next split point.
     expect(await column(1)).toEqual(["00:00:00", "00:39:74", "00:40:00"]);
   });
+});
+
+describe("server lifetime", () => {
+  // Pretends the tab went to the background or came back.
+  const setHidden = (hidden: boolean) =>
+    page.evaluate((h) => {
+      Object.defineProperty(document, "hidden", { configurable: true, get: () => h });
+      document.dispatchEvent(new Event("visibilitychange"));
+    }, hidden);
+
+  test("warns when the server has stopped", async () => {
+    await press("]");
+    await press("Shift+ArrowRight");
+    await press("m");
+    await server.stop();
+    await setHidden(false); // pings at once
+    await page.waitForFunction(() => document.title.startsWith("⚠"));
+    expect(await page.textContent("#toast")).toBe(
+      "The cue-edit server has stopped. 1 unsaved split point cannot be saved. Start cue-edit again and reload.",
+    );
+    // Saving says the same instead of failing silently.
+    await press("Meta+s");
+    expect(await page.textContent("#toast")).toContain("server has stopped");
+    expect(await page.title()).toBe("⚠ mix.cue");
+  });
+
+  test("a hidden page keeps the server alive", async () => {
+    await server.stop();
+    server = await startServer(fixture.cue, { CUE_EDIT_PING_LIMIT_MS: "1200", CUE_EDIT_HIDDEN_LIMIT_MS: "60000" });
+    await openPage();
+    await setHidden(true);
+    expect(await exitsWithin(server.proc, 3000)).toBe(false);
+    await setHidden(false);
+    // Visible again, so the short limit applies once the pings stop.
+    expect(await exitsWithin(server.proc, 3000)).toBe(true);
+  }, 15000);
 });
