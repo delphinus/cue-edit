@@ -166,4 +166,13 @@ describe("static files", () => {
     expect((await fetch(`${server!.url}..%2Fcue-edit.ts`)).status).toBe(404);
     expect((await fetch(`${server!.url}nope.txt`)).status).toBe(404);
   });
+
+  test("serves the favicon the page links to", async () => {
+    await open();
+    expect(await (await fetch(server!.url)).text()).toContain('<link rel="icon" href="/favicon.svg"');
+    const icon = await fetch(`${server!.url}favicon.svg`);
+    expect(icon.status).toBe(200);
+    expect(icon.headers.get("content-type")).toStartWith("image/svg+xml");
+    expect(await icon.text()).toStartWith("<svg");
+  });
 });
