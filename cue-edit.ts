@@ -159,6 +159,29 @@ function peaksBody(): Uint8Array {
 
 let backupPath = "";
 
+// The INDEX values the Δ column is measured from: the `.bak` copy of the sheet
+// (the state before the first save) when there is one, otherwise the sheet as
+// it was when cue-edit started, which is what the first save will back up.
+// Either way the baseline survives reloads and saves.
+const startupIndexes = sheet.tracks.map((t) => t.index);
+
+async function readBaseline(tracks: number): Promise<{ indexes: number[]; source: string }> {
+  const bak = `${cuePath}.bak`;
+  if (existsSync(bak)) {
+    try {
+      const text = Buffer.from(await Bun.file(bak).arrayBuffer()).toString("latin1");
+      const indexes = parseCue(text).tracks.map((t) => t.index);
+      // A .bak left over from another version of the sheet cannot be compared.
+      if (indexes.length === tracks) return { indexes, source: basename(bak) };
+      console.error(`ignoring ${bak}: ${indexes.length} tracks, the sheet has ${tracks}`);
+    } catch (e) {
+      console.error(`ignoring ${bak}: ${(e as Error).message}`);
+    }
+  }
+  if (startupIndexes.length === tracks) return { indexes: startupIndexes, source: "" };
+  return { indexes: [], source: "" };
+}
+
 async function save(indexes: number[]) {
   // Re-read so that edits made elsewhere to non-INDEX lines are not lost.
   const current = await readCueText();
@@ -220,6 +243,7 @@ const server = Bun.serve({
         // Re-read so that a reload picks up edits made to the sheet elsewhere.
         cueText = await readCueText();
         const s = parseCue(cueText);
+        const baseline = await readBaseline(s.tracks.length);
         return json({
           cuePath,
           cueName: basename(cuePath),
@@ -233,6 +257,10 @@ const server = Bun.serve({
           done: decode.done,
           error: decode.error,
           tracks: s.tracks,
+          // INDEX values to measure Δ from; empty when none fits the sheet.
+          baseline: baseline.indexes,
+          // Name of the .bak they came from; empty when it is the startup state.
+          baselineSource: baseline.source,
         });
       }
       case "/api/peaks":

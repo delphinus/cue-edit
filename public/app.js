@@ -13,7 +13,7 @@ const S = {
   peaks: new Uint16Array(0),
   tracks: [],
   cues: [], // cue frames
-  loaded: [], // cues as opened (for the Δ column)
+  loaded: [], // cues before any edit, from the .bak (for the Δ column)
   saved: [], // cues as last saved (for the dirty flag)
   selectedCue: -1,
   pos: 0,
@@ -1144,8 +1144,13 @@ async function load() {
   S.frames = info.frames;
   S.tracks = info.tracks;
   S.cues = info.tracks.map((t) => t.index);
-  S.loaded = [...S.cues];
+  // A server older than this page sends no baseline; fall back to the cues as
+  // opened, as before.
+  S.loaded = info.baseline?.length === S.cues.length ? info.baseline : [...S.cues];
   S.saved = [...S.cues];
+  $("delta-head").title = info.baselineSource
+    ? `Change from ${info.baselineSource} (the sheet before the first save)`
+    : "Change from the sheet as opened";
   S.cueName = info.cueName;
   S.album = info.title;
   S.peaks = new Uint16Array(await (await fetch("/api/peaks")).arrayBuffer());

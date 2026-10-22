@@ -94,8 +94,12 @@ they are kept in the browser's local storage.
   bottom), as mp3DirectCut does, so fades and reverb tails stay visible.
 - The waveform is drawn at the same resolution: one bar per cue frame when
   zoomed in, and zooming stops once a cue frame is 32 px wide.
-- The Δ column shows how far each split point has moved since the sheet was
-  opened, in seconds.
+- The Δ column shows how far each split point has moved from the original
+  sheet, in seconds. The original is the `.bak` copy when there is one, so the
+  values survive saving, reloading the page and restarting cue-edit. Without a
+  `.bak` (nothing saved yet) it is the sheet as cue-edit opened it, which is
+  what the first save backs up. A `.bak` with a different number of tracks is
+  ignored. Delete the `.bak` to start measuring from the current sheet.
 
 ## License
 
