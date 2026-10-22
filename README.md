@@ -101,6 +101,24 @@ they are kept in the browser's local storage.
   what the first save backs up. A `.bak` with a different number of tracks is
   ignored. Delete the `.bak` to start measuring from the current sheet.
 
+## Tests
+
+```sh
+bun install
+bunx playwright install chromium-headless-shell   # once, for the browser tests
+bun test
+```
+
+- `lib/cue.test.ts` covers parsing and rewriting cue sheets.
+- `test/server.test.ts` starts cue-edit against a generated mix (ffmpeg is
+  required) and checks the HTTP API: the sheet and peaks, saving, the `.bak`
+  copy and the baseline of the Δ column.
+- `test/e2e.test.ts` drives the page in headless Chromium: moving split points
+  with the keys and the mouse, undo, saving and reloading.
+
+The same suite runs on GitHub Actions for every push to `main` and every pull
+request.
+
 ## License
 
 MIT
