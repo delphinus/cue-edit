@@ -9,7 +9,8 @@ const settings = { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem("cue-
 
 const S = {
   sr: 44100,
-  frames: 0,
+  frames: 0, // length of the timeline: the whole file, or an estimate while decoding
+  decoded: 0, // frames the server can play so far
   peaks: new Uint16Array(0),
   tracks: [],
   cues: [], // cue frames
@@ -111,12 +112,21 @@ class Player {
     let nextTime = 0;
     let size = Math.min(secs(0.25), this.to - from);
     const pump = async () => {
-      while (gen === this.gen && next < this.to && (this.startTime === null || nextTime - ctx.currentTime < 1.5)) {
-        const audio = await this.chunk(next, Math.min(size, this.to - next), gen);
+      // While the audio is still being decoded, play what there is and pick
+      // up the rest as it arrives (decoding runs far ahead of playback).
+      const limit = () => Math.min(this.to, S.decoded);
+      while (gen === this.gen && next < limit() && (this.startTime === null || nextTime - ctx.currentTime < 1.5)) {
+        const audio = await this.chunk(next, Math.min(size, limit() - next), gen);
         if (!audio) return;
         if (this.startTime === null) {
           this.startTime = ctx.currentTime + 0.03;
           nextTime = this.startTime;
+        } else if (nextTime < ctx.currentTime) {
+          // Playback caught up with decoding and paused; shift the timeline
+          // by the pause so that the playhead stays on the sound.
+          const gap = ctx.currentTime + 0.03 - nextTime;
+          this.startTime += gap;
+          nextTime += gap;
         }
         const src = ctx.createBufferSource();
         src.buffer = audio;
@@ -294,7 +304,7 @@ async function save() {
     res = await fetch("/api/save", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ indexes: S.cues }),
+      body: JSON.stringify({ indexes: S.cues, cuePath: S.cuePath }),
     });
   } catch {
     serverLost();
@@ -310,6 +320,134 @@ async function save() {
   renderTracks();
   draw();
 }
+
+// Asks the server to show its file dialog, and starts over with the sheet
+// chosen there. The page cannot show one itself: it would get the contents of
+// the file but not its path, which the server needs to find the audio and to
+// save in place.
+let opening = false;
+// Opens `path`, or the sheet chosen in the file dialog when there is none.
+async function openFile(path) {
+  closeRecentMenu();
+  if (opening || lost) return;
+  const unsaved = S.cues.filter((c, i) => c !== S.saved[i]).length;
+  if (unsaved && !confirm(`Discard ${unsaved} unsaved split point${unsaved === 1 ? "" : "s"}?`)) return;
+  opening = true;
+  $("open").disabled = true;
+  let res;
+  try {
+    res = await fetch("/api/open", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(path ? { path } : {}),
+    });
+  } catch {
+    serverLost();
+    return;
+  } finally {
+    opening = false;
+    $("open").disabled = false;
+  }
+  const body = await res.json();
+  if (!res.ok) {
+    toast(`Cannot open: ${body.error}`, { error: true });
+    return;
+  }
+  if (body.cancelled) return;
+  // Start afresh in this page rather than reloading it: Safari kept showing
+  // the previous sheet for two seconds while it tore the old page down.
+  resetSheet();
+  load();
+}
+
+// Forgets everything about the open sheet and shows the decoding notice.
+function resetSheet() {
+  player.stop();
+  Object.assign(S, {
+    frames: 0,
+    decoded: 0,
+    peaks: new Uint16Array(0),
+    tracks: [],
+    cues: [],
+    loaded: [],
+    saved: [],
+    selectedCue: -1,
+    pos: 0,
+    sel: { a: 0, b: 0 },
+    view: { start: 0, spp: 1 },
+    undo: [],
+    redo: [],
+    drag: null,
+    ready: false,
+    cuePath: undefined,
+    cueName: undefined,
+    album: undefined,
+  });
+  overviewImage = null;
+  titlesCache = { key: "", canvas: null };
+  $("loading").textContent = "Loading…";
+  $("loading").hidden = false;
+  $("progress").hidden = true;
+  $("title").textContent = "";
+  $("files").textContent = "";
+  $("files").parentElement.title = "";
+  renderTracks();
+  drawWave();
+  draw();
+}
+
+// ---------------------------------------------------------------- recent sheets
+
+async function fetchRecent() {
+  try {
+    return await (await fetch("/api/recent")).json();
+  } catch {
+    return [];
+  }
+}
+
+// Fills `list` with a button for each recent sheet: its name, and the folder
+// it is in, since mixes often share names.
+function renderRecent(list, recent) {
+  list.replaceChildren(
+    ...recent.map(({ path, name, folder }) => {
+      const item = document.createElement("button");
+      item.className = "recent-item";
+      item.setAttribute("role", "menuitem");
+      item.title = path;
+      const nameEl = document.createElement("span");
+      nameEl.textContent = name;
+      const folderEl = document.createElement("span");
+      folderEl.className = "dim";
+      folderEl.textContent = folder;
+      item.append(nameEl, folderEl);
+      item.addEventListener("click", () => openFile(path));
+      return item;
+    }),
+  );
+  if (!recent.length) {
+    const none = document.createElement("div");
+    none.className = "dim recent-none";
+    none.textContent = "No recent cue sheets";
+    list.append(none);
+  }
+}
+
+async function toggleRecentMenu() {
+  const menu = $("recent-menu");
+  if (!menu.hidden) return closeRecentMenu();
+  renderRecent(menu, await fetchRecent());
+  menu.hidden = false;
+  menu.querySelector("button")?.focus();
+}
+
+function closeRecentMenu() {
+  $("recent-menu").hidden = true;
+}
+
+document.addEventListener("pointerdown", (e) => {
+  if (!e.target.closest(".open-group")) closeRecentMenu();
+});
 
 let toastTimer;
 function toast(text, { error = false, sticky = false } = {}) {
@@ -526,6 +664,12 @@ function drawOverview() {
     g.fillStyle = cueColor(i);
     g.fillRect(Math.round(cueToFrame(cue) * k), 0, 1, c.height);
   });
+  // What cannot be played yet (still being decoded) is shaded.
+  if (S.decoded < S.frames) {
+    g.fillStyle = "rgba(0, 0, 0, 0.45)";
+    const x = Math.round(S.decoded * k);
+    g.fillRect(x, 0, c.width - x, c.height);
+  }
   const ph = head;
   g.fillStyle = ph !== null ? COLORS.playhead : COLORS.cursor;
   g.fillRect(Math.round((ph ?? S.pos) * k), 0, 1, c.height);
@@ -535,7 +679,7 @@ function drawOverview() {
 // width as mp3DirectCut does. Cached until a split point moves or it resizes.
 let titlesCache = { key: "", canvas: null };
 function overviewTitles(c) {
-  const key = `${c.width}x${c.height}:${S.cues.join(",")}`;
+  const key = `${c.width}x${c.height}:${S.frames}:${S.cues.join(",")}`;
   if (titlesCache.key === key) return titlesCache.canvas;
   const canvas = document.createElement("canvas");
   canvas.width = c.width;
@@ -975,6 +1119,24 @@ function codeOf(e) {
 
 window.addEventListener("keydown", (e) => {
   if (e.target instanceof HTMLInputElement || $("help").open) return;
+  // The recent menu takes the keys while it is open: ↑ ↓ pick, Esc closes.
+  if (!$("recent-menu").hidden) {
+    const items = [...$("recent-menu").querySelectorAll("button")];
+    const at = items.indexOf(document.activeElement);
+    if (e.key === "Escape") closeRecentMenu();
+    else if (e.key === "ArrowDown") items[(at + 1) % items.length]?.focus();
+    else if (e.key === "ArrowUp") items[(at - 1 + items.length) % items.length]?.focus();
+    else if (e.key !== "Enter") return;
+    // Enter on a focused item clicks it; everything else is handled above.
+    if (e.key !== "Enter") e.preventDefault();
+    return;
+  }
+  // ⌘O works on the empty page too.
+  if (e.metaKey && codeOf(e) === "KeyO") {
+    e.preventDefault();
+    openFile();
+    return;
+  }
   if (!S.ready) return;
   const key = e.key === "Process" || e.isComposing ? CODE_KEYS[e.code] ?? e.code : e.key;
   const code = codeOf(e);
@@ -1118,6 +1280,8 @@ $("settings").addEventListener("input", (e) => {
   }
 });
 $("save").addEventListener("click", save);
+$("open").addEventListener("click", () => openFile());
+$("recent").addEventListener("click", toggleRecentMenu);
 
 window.addEventListener("beforeunload", (e) => {
   if (isDirty()) e.preventDefault();
@@ -1157,25 +1321,35 @@ new ResizeObserver(() => resize()).observe($("wave-box"));
 
 // ---------------------------------------------------------------- start
 
+// Bumped by each load, so that one started for an earlier sheet stops.
+let loadGen = 0;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// The page is usable as soon as the sheet is known: the waveform fills in and
+// playback reaches further while the server decodes (or straight away when
+// it has the peaks from an earlier run).
 async function load() {
-  let info;
-  for (;;) {
-    info = await (await fetch("/api/info")).json();
-    if (info.done) break;
-    $("loading").textContent = `Decoding… ${(info.frames / info.sampleRate).toFixed(0)} s`;
-    await new Promise((r) => setTimeout(r, 300));
-  }
+  const gen = ++loadGen;
+  const info = await (await fetch("/api/info")).json();
+  if (gen !== loadGen) return;
   // A server started before an update sends peaks this page cannot read.
-  if (info.peaks !== "cue-frame-u16") {
+  if (info.peaks !== "cue-frame-u16" || info.peakCount === undefined) {
     $("loading").textContent = "The cue-edit server is older than this page. Restart cue-edit and reload.";
     return;
   }
+  if (!info.cuePath) return showEmpty(gen);
   if (info.error) {
     $("loading").textContent = `Decoding failed: ${info.error}`;
     return;
   }
   S.sr = info.sampleRate;
-  S.frames = info.frames;
+  // The audio context runs at the rate of the sheet it was made for; another
+  // rate would play too fast or too slow.
+  if (player.ctx && player.ctx.sampleRate !== S.sr) {
+    player.ctx.close();
+    player.ctx = null;
+  }
   S.tracks = info.tracks;
   S.cues = info.tracks.map((t) => t.index);
   // A server older than this page sends no baseline; fall back to the cues as
@@ -1185,17 +1359,76 @@ async function load() {
   $("delta-head").title = info.baselineSource
     ? `Change from ${info.baselineSource} (the sheet before the first save)`
     : "Change from the sheet as opened";
+  S.cuePath = info.cuePath;
   S.cueName = info.cueName;
   S.album = info.title;
-  S.peaks = new Uint16Array(await (await fetch("/api/peaks")).arrayBuffer());
   $("title").textContent = [info.performer, info.title].filter(Boolean).join(" – ") || info.cueName;
-  $("files").textContent = `${info.cueName} · ${info.audioName} · ${fmtTime(info.frames)}`;
   $("files").parentElement.title = `${info.cuePath}\n${info.audioName}`;
-  $("loading").remove();
+  S.names = `${info.cueName} · ${info.audioName}`;
+  if (!(await update(info, gen))) return;
+  $("loading").hidden = true;
   S.ready = true;
   resize();
   setView(0, maxSpp());
   renderTracks();
+  let last = info;
+  while (!last.done) {
+    await sleep(250);
+    if (gen !== loadGen) return;
+    last = await (await fetch("/api/info")).json();
+    if (gen !== loadGen || !(await update(last, gen))) return;
+  }
+  if (last.error) toast(`Decoding failed: ${last.error}`, { error: true, sticky: true });
+}
+
+// Takes in the decoding progress from /api/info: the length, the frames that
+// can be played, and any new peaks. False when another load has taken over.
+async function update(info, gen) {
+  if (info.peakCount > S.peaks.length) {
+    const more = new Uint16Array(await (await fetch(`/api/peaks?from=${S.peaks.length}`)).arrayBuffer());
+    if (gen !== loadGen) return false;
+    const peaks = new Uint16Array(S.peaks.length + more.length);
+    peaks.set(S.peaks);
+    peaks.set(more, S.peaks.length);
+    S.peaks = peaks;
+    overviewImage = null;
+  }
+  const frames = info.length || Math.max(Math.round(info.duration * info.sampleRate), info.frames);
+  if (frames !== S.frames) overviewImage = null;
+  S.frames = frames;
+  S.decoded = info.frames;
+  $("files").textContent = `${S.names} · ${fmtTime(S.frames)}`;
+  $("progress").hidden = info.done;
+  $("progress").textContent = `Decoding ${Math.min(99, Math.floor((S.decoded / S.frames) * 100))}%`;
+  if (S.ready) {
+    clampView();
+    drawWave();
+    draw();
+  }
+  return true;
+}
+
+async function showEmpty(gen) {
+  const button = document.createElement("button");
+  button.textContent = "Open a cue sheet…";
+  button.title = "⌘O";
+  button.addEventListener("click", () => openFile());
+  const box = document.createElement("div");
+  box.className = "empty";
+  box.append(button);
+  const recent = await fetchRecent();
+  if (gen !== loadGen) return;
+  if (recent.length) {
+    const heading = document.createElement("div");
+    heading.className = "dim";
+    heading.textContent = "Recent";
+    const list = document.createElement("div");
+    list.className = "recent-list";
+    renderRecent(list, recent);
+    box.append(heading, list);
+  }
+  $("loading").replaceChildren(box);
+  $("files").textContent = "No cue sheet open";
 }
 
 resize();

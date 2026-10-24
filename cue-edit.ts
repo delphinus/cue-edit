@@ -1,15 +1,30 @@
 #!/usr/bin/env bun
 // cue-edit: refine the INDEX points of a cue sheet in the browser.
 //
-// Usage: cue-edit <sheet.cue> [--port <n>] [--no-open]
+// Usage: cue-edit [<sheet.cue>] [--port <n>] [--no-open]
 //
 // The audio referenced by the FILE line is decoded once with ffmpeg into a raw
 // PCM file in a temporary directory. The browser fetches waveform peaks (one
 // per cue frame) and PCM windows for playback from it, so what it shows and
 // plays uses the same decoder (and timeline) as an ffmpeg-based splitter.
+//
+// Without a sheet the page starts empty; it can open one (and switch to
+// another later) through a native file dialog that this server shows.
 
-import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import type { Subprocess } from "bun";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { CUE_FPS, onlyIndexesChanged, parseCue, rewriteIndexes } from "./lib/cue";
 
@@ -18,12 +33,12 @@ const CHANNELS = 2; // PCM is always served as interleaved stereo s16le
 const BYTES_PER_FRAME = CHANNELS * 2;
 
 function usage(code: number): never {
-  console.error("Usage: cue-edit <sheet.cue> [--port <n>] [--no-open]");
+  console.error("Usage: cue-edit [<sheet.cue>] [--port <n>] [--no-open]");
   process.exit(code);
 }
 
 const argv = process.argv.slice(2);
-let cuePath = "";
+let initialCue = "";
 let port = 0;
 let openBrowser = true;
 for (let i = 0; i < argv.length; i++) {
@@ -31,39 +46,37 @@ for (let i = 0; i < argv.length; i++) {
   if (a === "--port") port = Number(argv[++i]);
   else if (a === "--no-open") openBrowser = false;
   else if (a === "-h" || a === "--help") usage(0);
-  else if (!cuePath) cuePath = resolve(a);
+  else if (!initialCue) initialCue = resolve(a);
   else usage(2);
 }
-if (!cuePath) usage(2);
 
-const readCueText = async () => Buffer.from(await Bun.file(cuePath).arrayBuffer()).toString("latin1");
+const readLatin1 = async (path: string) => Buffer.from(await Bun.file(path).arrayBuffer()).toString("latin1");
 
-let cueText = await readCueText();
-const sheet = parseCue(cueText);
-const audioPath = resolve(dirname(cuePath), sheet.file);
-if (!existsSync(audioPath)) {
-  console.error(`audio file not found: ${audioPath}`);
-  process.exit(1);
-}
-
-async function probeSampleRate(path: string): Promise<number> {
+// Sample rate of the first audio stream, and the duration in seconds (0 when
+// the container does not say, as with raw ADTS). JSON rather than CSV: CSV
+// adds a column for each kind of side data, so an MP3 came out as "44100,".
+async function probeAudio(path: string): Promise<{ sampleRate: number; duration: number }> {
   const proc = Bun.spawn(
-    ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=sample_rate", "-of", "csv=p=0", path],
-    { stdout: "pipe", stderr: "inherit" },
+    ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=sample_rate:format=duration", "-of", "json", path],
+    { stdout: "pipe", stderr: "pipe" },
   );
-  const out = (await new Response(proc.stdout).text()).trim();
-  if ((await proc.exited) !== 0 || !out) throw new Error(`ffprobe failed for ${path}`);
-  return Number(out);
+  const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+  if (code !== 0) throw new Error(`ffprobe failed for ${path}: ${err.trim()}`);
+  const probe = JSON.parse(out) as { streams?: { sample_rate?: string }[]; format?: { duration?: string } };
+  const sampleRate = Number(probe.streams?.[0]?.sample_rate);
+  if (!(sampleRate > 0)) throw new Error(`no audio stream found in ${path}`);
+  return { sampleRate, duration: Number(probe.format?.duration) || 0 };
 }
 
-const sampleRate = await probeSampleRate(audioPath);
 const workDir = mkdtempSync(join(tmpdir(), "cue-edit-"));
-const pcmPath = join(workDir, "audio.pcm");
+// Child processes that must not outlive the server.
+const children = new Set<Subprocess>();
 
 let cleanedUp = false;
 function cleanup() {
   if (cleanedUp) return;
   cleanedUp = true;
+  for (const proc of children) proc.kill();
   rmSync(workDir, { recursive: true, force: true });
 }
 process.on("exit", cleanup);
@@ -71,20 +84,231 @@ for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
   process.on(sig, () => process.exit(0));
 }
 
-// Decoding state, filled in while ffmpeg runs.
-const decode = {
-  done: false,
-  error: "",
-  frames: 0,
-  peaks: [] as Uint16Array[],
+// Sheets opened recently, newest first, kept across runs so that they can be
+// reopened from the page and the file dialog starts where the last one was.
+// The page cannot keep them: its origin, and so its storage, changes with the
+// port on every run. CUE_EDIT_STATE_DIR moves the file (for tests).
+const RECENT_MAX = 10;
+const stateDir =
+  process.env.CUE_EDIT_STATE_DIR || join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "cue-edit");
+const recentPath = join(stateDir, "recent.json");
+const home = homedir();
+const tilde = (p: string) => (p === home || p.startsWith(`${home}/`) ? `~${p.slice(home.length)}` : p);
+
+function readRecent(): string[] {
+  try {
+    const list = JSON.parse(readFileSync(recentPath, "utf8"));
+    return Array.isArray(list) ? list.filter((p): p is string => typeof p === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberSheet(path: string) {
+  const list = [path, ...readRecent().filter((p) => p !== path)].slice(0, RECENT_MAX);
+  try {
+    mkdirSync(stateDir, { recursive: true });
+    // Written aside and renamed, so that a crash never leaves half a file.
+    const tmp = `${recentPath}.${process.pid}.tmp`;
+    writeFileSync(tmp, `${JSON.stringify(list, null, 2)}\n`);
+    renameSync(tmp, recentPath);
+  } catch (e) {
+    console.error(`cannot record ${path} in ${recentPath}: ${(e as Error).message}`);
+  }
+}
+
+// Peaks of decoded audio, kept across runs so that a mix opened before shows
+// its waveform at once (the PCM for playback is still decoded meanwhile). An
+// entry is used only while the audio file has the same path, size and
+// modification time.
+const PEAKS_CACHE_MAX = 20;
+const peaksDir = join(stateDir, "peaks");
+
+type PeaksKey = { path: string; size: number; mtimeMs: number; sampleRate: number };
+
+function peaksCachePath(key: PeaksKey): string {
+  const hash = new Bun.CryptoHasher("sha1").update(JSON.stringify([PEAKS_FORMAT, key])).digest("hex");
+  return join(peaksDir, `${hash}.peaks`);
+}
+
+// The cached peaks and the frame count they were made from, or null.
+function readCachedPeaks(key: PeaksKey): { peaks: Uint16Array; frames: number } | null {
+  try {
+    const buf = readFileSync(peaksCachePath(key));
+    // An 8-byte frame count, then the peaks.
+    const frames = Number(buf.readBigUInt64LE(0));
+    const peaks = new Uint16Array(buf.buffer.slice(buf.byteOffset + 8, buf.byteOffset + buf.length));
+    return { peaks, frames };
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedPeaks(key: PeaksKey, peaks: Uint16Array, frames: number) {
+  const path = peaksCachePath(key);
+  try {
+    mkdirSync(peaksDir, { recursive: true });
+    const head = Buffer.alloc(8);
+    head.writeBigUInt64LE(BigInt(frames));
+    const tmp = `${path}.${process.pid}.tmp`;
+    writeFileSync(tmp, Buffer.concat([head, Buffer.from(peaks.buffer, peaks.byteOffset, peaks.byteLength)]));
+    renameSync(tmp, path);
+    // Keep the newest entries only.
+    const entries = readdirSync(peaksDir)
+      .filter((f) => f.endsWith(".peaks"))
+      .map((f) => ({ f, t: statSync(join(peaksDir, f)).mtimeMs }))
+      .sort((x, y) => y.t - x.t);
+    for (const { f } of entries.slice(PEAKS_CACHE_MAX)) rmSync(join(peaksDir, f), { force: true });
+  } catch (e) {
+    console.error(`cannot cache the peaks in ${path}: ${(e as Error).message}`);
+  }
+}
+
+// A decoded audio file: the PCM for playback in a temporary file, and one
+// peak per cue frame for the waveform. Both grow while ffmpeg runs, and the
+// page uses what there is so far.
+type Audio = {
+  key: PeaksKey;
+  sampleRate: number;
+  // Seconds, from the container; 0 when unknown. Only an estimate of the
+  // length until decoding is done.
+  duration: number;
+  pcmPath: string;
+  decoder: Subprocess | null;
+  done: boolean;
+  error: string;
+  // Frames of PCM written to pcmPath so far, which /api/pcm can serve.
+  frames: number;
+  // Frames in the whole file: known once decoded, or from the peaks cache.
+  length: number;
+  peaks: Uint16Array; // the first peakCount entries are valid
+  peakCount: number;
+  // The peaks came from the cache, so decoding only produces the PCM.
+  peaksCached: boolean;
 };
 
-async function runDecode() {
+// Everything that belongs to the open sheet. Opening another sheet replaces
+// the whole session, so nothing of the previous one can leak into it.
+type Session = {
+  cuePath: string;
+  audio: Audio;
+  // INDEX values as opened; see readBaseline.
+  startupIndexes: number[];
+  backupPath: string;
+};
+
+let session: Session | null = null;
+// The audio of the sheet open before, kept (once decoded) so that going back
+// to it does not decode it again. One is enough for going back and forth.
+let keptAudio: Audio | null = null;
+let audioCount = 0;
+
+const sameKey = (a: PeaksKey, b: PeaksKey) =>
+  a.path === b.path && a.size === b.size && a.mtimeMs === b.mtimeMs && a.sampleRate === b.sampleRate;
+
+// Opens `path` and makes it the current sheet. Throws, leaving the current
+// sheet open, if the sheet cannot be read or its audio is missing.
+async function openSheet(path: string): Promise<Session> {
+  const cuePath = resolve(path);
+  if (!existsSync(cuePath)) throw new Error(`cue sheet not found: ${cuePath}`);
+  const sheet = parseCue(await readLatin1(cuePath));
+  const audioPath = resolve(dirname(cuePath), sheet.file);
+  if (!existsSync(audioPath)) throw new Error(`audio file not found: ${audioPath}`);
+  const probe = await probeAudio(audioPath);
+  const stat = statSync(audioPath);
+  const key: PeaksKey = { path: audioPath, size: stat.size, mtimeMs: stat.mtimeMs, sampleRate: probe.sampleRate };
+
+  const prev = session?.audio ?? null;
+  let audio: Audio;
+  let reused = "";
+  if (prev && sameKey(prev.key, key)) {
+    audio = prev; // another sheet for the same audio
+    reused = "the audio already open";
+  } else if (keptAudio && sameKey(keptAudio.key, key)) {
+    audio = keptAudio;
+    keptAudio = null;
+    reused = "the audio kept from before";
+  } else {
+    audio = newAudio(key, probe);
+  }
+  session = {
+    cuePath,
+    audio,
+    startupIndexes: sheet.tracks.map((t) => t.index),
+    backupPath: "",
+  };
+  if (prev && prev !== audio) retire(prev);
+  console.error(`opened ${cuePath}${reused ? ` (reusing ${reused})` : ""}`);
+  rememberSheet(cuePath);
+  if (!reused) startDecode(audio);
+  return session;
+}
+
+function newAudio(key: PeaksKey, probe: { sampleRate: number; duration: number }): Audio {
+  const cached = readCachedPeaks(key);
+  // Room for the estimated length, so that the array rarely has to grow.
+  const estimate = Math.ceil(probe.duration * CUE_FPS) + 1;
+  return {
+    key,
+    ...probe,
+    pcmPath: join(workDir, `audio-${++audioCount}.pcm`),
+    decoder: null,
+    done: false,
+    error: "",
+    frames: 0,
+    length: cached?.frames ?? 0,
+    peaks: cached?.peaks ?? new Uint16Array(Math.max(1024, estimate)),
+    peakCount: cached?.peaks.length ?? 0,
+    peaksCached: cached !== null,
+  };
+}
+
+// The audio of the sheet that was open: kept for going back if it was decoded
+// in full, dropped otherwise (along with the one kept before).
+function retire(a: Audio) {
+  if (a.done && !a.error) {
+    if (keptAudio) dropAudio(keptAudio);
+    keptAudio = a;
+  } else {
+    dropAudio(a);
+  }
+}
+
+function dropAudio(a: Audio) {
+  a.decoder?.kill();
+  rmSync(a.pcmPath, { force: true });
+}
+
+function startDecode(a: Audio) {
+  const started = performance.now();
+  runDecode(a).then(() => {
+    if (a.error || !a.done) return;
+    const secs = ((performance.now() - started) / 1000).toFixed(1);
+    console.error(`decoded ${(a.frames / a.sampleRate).toFixed(1)} s of audio in ${secs} s`);
+  });
+}
+
+function pushPeak(a: Audio, peak: number) {
+  if (a.peakCount === a.peaks.length) {
+    const grown = new Uint16Array(a.peaks.length * 2);
+    grown.set(a.peaks);
+    a.peaks = grown;
+  }
+  a.peaks[a.peakCount++] = peak;
+}
+
+async function runDecode(a: Audio) {
+  const { sampleRate } = a;
+  // CUE_EDIT_READRATE slows decoding down to that multiple of real time, so
+  // that tests can watch a page work while the audio is still being decoded.
+  const readrate = process.env.CUE_EDIT_READRATE ? ["-readrate", process.env.CUE_EDIT_READRATE] : [];
   const proc = Bun.spawn(
-    ["ffmpeg", "-nostdin", "-v", "error", "-i", audioPath, "-map", "0:a:0", "-ac", String(CHANNELS), "-f", "s16le", "-acodec", "pcm_s16le", "-"],
+    ["ffmpeg", "-nostdin", "-v", "error", ...readrate, "-i", a.key.path, "-map", "0:a:0", "-ac", String(CHANNELS), "-f", "s16le", "-acodec", "pcm_s16le", "-"],
     { stdout: "pipe", stderr: "pipe" },
   );
-  const writer = Bun.file(pcmPath).writer();
+  a.decoder = proc;
+  children.add(proc);
+  const writer = Bun.file(a.pcmPath).writer();
   let carry = new Uint8Array(0);
   // One peak entry per cue frame (1/75 s), the finest step a cue sheet can
   // express: the largest absolute sample of both channels, kept at 16 bits so
@@ -95,7 +319,6 @@ async function runDecode() {
   let blockPeak = 0;
   let blockFill = 0;
   let frame = 0;
-  let pending: number[] = [];
   for await (const chunk of proc.stdout) {
     writer.write(chunk);
     let data = chunk as Uint8Array;
@@ -106,71 +329,62 @@ async function runDecode() {
       data = merged;
     }
     const whole = data.length - (data.length % BYTES_PER_FRAME);
-    const view = new DataView(data.buffer, data.byteOffset, whole);
-    for (let off = 0; off < whole; off += BYTES_PER_FRAME) {
-      const l = Math.abs(view.getInt16(off, true));
-      const r = Math.abs(view.getInt16(off + 2, true));
-      if (l > blockPeak) blockPeak = l;
-      if (r > blockPeak) blockPeak = r;
-      blockFill++;
-      if (++frame === blockEnd) {
-        pending.push(blockPeak);
-        blockPeak = 0;
-        blockFill = 0;
-        blockEnd = Math.round(((++block + 1) * sampleRate) / CUE_FPS);
+    if (!a.peaksCached) {
+      const view = new DataView(data.buffer, data.byteOffset, whole);
+      for (let off = 0; off < whole; off += BYTES_PER_FRAME) {
+        const l = Math.abs(view.getInt16(off, true));
+        const r = Math.abs(view.getInt16(off + 2, true));
+        if (l > blockPeak) blockPeak = l;
+        if (r > blockPeak) blockPeak = r;
+        blockFill++;
+        if (++frame === blockEnd) {
+          pushPeak(a, blockPeak);
+          blockPeak = 0;
+          blockFill = 0;
+          blockEnd = Math.round(((++block + 1) * sampleRate) / CUE_FPS);
+        }
       }
     }
-    decode.frames += whole / BYTES_PER_FRAME;
     carry = data.slice(whole);
-    if (pending.length >= 8192) {
-      decode.peaks.push(Uint16Array.from(pending));
-      pending = [];
-    }
+    // Only what has reached the file can be served for playback.
+    await writer.flush();
+    a.frames += whole / BYTES_PER_FRAME;
   }
-  if (blockFill > 0) pending.push(blockPeak);
-  if (pending.length) decode.peaks.push(Uint16Array.from(pending));
+  if (!a.peaksCached && blockFill > 0) pushPeak(a, blockPeak);
   await writer.end();
   const code = await proc.exited;
+  children.delete(proc);
+  // Killed because another sheet was opened: nothing is waiting for it.
+  if (a.decoder !== proc || proc.signalCode) return;
+  a.decoder = null;
   if (code !== 0) {
-    decode.error = (await new Response(proc.stderr).text()).trim() || `ffmpeg exited with ${code}`;
-    console.error(decode.error);
+    a.error = (await new Response(proc.stderr).text()).trim() || `ffmpeg exited with ${code}`;
+    console.error(a.error);
+  } else {
+    if (a.peaksCached && a.length !== a.frames) {
+      console.error(`cached peaks were for ${a.length} frames, decoded ${a.frames}`);
+    }
+    a.length = a.frames;
+    if (!a.peaksCached) writeCachedPeaks(a.key, a.peaks.subarray(0, a.peakCount), a.frames);
   }
-  decode.done = true;
+  a.done = true;
 }
 
-const decodeStarted = performance.now();
-runDecode().then(() => {
-  if (!decode.error) {
-    const secs = ((performance.now() - decodeStarted) / 1000).toFixed(1);
-    console.error(`decoded ${(decode.frames / sampleRate).toFixed(1)} s of audio in ${secs} s`);
-  }
-});
-
-function peaksBody(): Uint8Array {
-  const total = decode.peaks.reduce((n, p) => n + p.length, 0);
-  const out = new Uint16Array(total);
-  let off = 0;
-  for (const p of decode.peaks) {
-    out.set(p, off);
-    off += p.length;
-  }
-  return new Uint8Array(out.buffer);
+// Peaks from entry `from` on, as little-endian u16.
+function peaksBody(a: Audio, from: number): Uint8Array {
+  const part = a.peaks.slice(Math.min(from, a.peakCount), a.peakCount);
+  return new Uint8Array(part.buffer);
 }
-
-let backupPath = "";
 
 // The INDEX values the Δ column is measured from: the `.bak` copy of the sheet
 // (the state before the first save) when there is one, otherwise the sheet as
-// it was when cue-edit started, which is what the first save will back up.
+// it was when it was opened, which is what the first save will back up.
 // Either way the baseline survives reloads and saves.
-const startupIndexes = sheet.tracks.map((t) => t.index);
-
-async function readBaseline(tracks: number): Promise<{ indexes: number[]; source: string }> {
-  const bak = `${cuePath}.bak`;
+async function readBaseline(s: Session, tracks: number): Promise<{ indexes: number[]; source: string }> {
+  const bak = `${s.cuePath}.bak`;
   if (existsSync(bak)) {
     try {
-      const text = Buffer.from(await Bun.file(bak).arrayBuffer()).toString("latin1");
-      const indexes = parseCue(text).tracks.map((t) => t.index);
+      const indexes = parseCue(await readLatin1(bak)).tracks.map((t) => t.index);
       // A .bak left over from another version of the sheet cannot be compared.
       if (indexes.length === tracks) return { indexes, source: basename(bak) };
       console.error(`ignoring ${bak}: ${indexes.length} tracks, the sheet has ${tracks}`);
@@ -178,23 +392,56 @@ async function readBaseline(tracks: number): Promise<{ indexes: number[]; source
       console.error(`ignoring ${bak}: ${(e as Error).message}`);
     }
   }
-  if (startupIndexes.length === tracks) return { indexes: startupIndexes, source: "" };
+  if (s.startupIndexes.length === tracks) return { indexes: s.startupIndexes, source: "" };
   return { indexes: [], source: "" };
 }
 
-async function save(indexes: number[]) {
+async function save(s: Session, indexes: number[]) {
   // Re-read so that edits made elsewhere to non-INDEX lines are not lost.
-  const current = await readCueText();
+  const current = await readLatin1(s.cuePath);
   const next = rewriteIndexes(current, indexes);
   if (!onlyIndexesChanged(current, next)) throw new Error("refusing to save: lines other than INDEX 01 would change");
-  if (!backupPath) {
-    const candidate = `${cuePath}.bak`;
-    if (!existsSync(candidate)) copyFileSync(cuePath, candidate);
-    backupPath = candidate;
+  if (!s.backupPath) {
+    const candidate = `${s.cuePath}.bak`;
+    if (!existsSync(candidate)) copyFileSync(s.cuePath, candidate);
+    s.backupPath = candidate;
   }
-  await Bun.write(cuePath, Buffer.from(next, "latin1"));
-  cueText = next;
-  return { path: cuePath, backup: backupPath };
+  await Bun.write(s.cuePath, Buffer.from(next, "latin1"));
+  return { path: s.cuePath, backup: s.backupPath };
+}
+
+// Shows the macOS file dialog and resolves to the chosen path, or "" when it
+// is cancelled. The page cannot do this itself: a browser hands a page the
+// contents of a file, never its path, and the server needs the path to find
+// the audio next to the sheet and to save in place.
+let choosing = false;
+async function chooseSheet(): Promise<string> {
+  // The folder of the open sheet, else of the last one opened (in an earlier
+  // run, as the page starts empty), else where cue-edit was started.
+  const last = session?.cuePath ?? readRecent()[0];
+  const from = last && existsSync(dirname(last)) ? dirname(last) : process.cwd();
+  const proc = Bun.spawn(
+    [
+      "osascript",
+      "-e", "on run argv",
+      // No `activate`: it adds two seconds, and the dialog comes to the front
+      // without it (osascript puts it on the modal panel layer).
+      "-e", 'POSIX path of (choose file with prompt "Open a cue sheet" of type {"cue"} default location (POSIX file (item 1 of argv)))',
+      "-e", "end run",
+      from,
+    ],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  children.add(proc);
+  const [out, err, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  children.delete(proc);
+  if (code === 0) return out.trim();
+  if (err.includes("-128")) return ""; // User canceled.
+  throw new Error(err.trim() || `osascript exited with ${code}`);
 }
 
 // The page reports when it is closed; exit unless it comes back (reload).
@@ -229,12 +476,29 @@ setInterval(
 );
 
 const publicDir = join(import.meta.dir, "public");
+
+// Requests that open or write files must come from this page, not from
+// another site the browser happens to have open. Browsers send Origin with
+// every POST; tools such as curl send none, and are let through.
+function sameOrigin(req: Request): boolean {
+  const origin = req.headers.get("origin");
+  return !origin || origin === new URL(req.url).origin;
+}
 const json = (data: unknown, status = 200) => Response.json(data, { status });
+
+if (initialCue) {
+  try {
+    await openSheet(initialCue);
+  } catch (e) {
+    console.error((e as Error).message);
+    process.exit(1);
+  }
+}
 
 const server = Bun.serve({
   port,
   hostname: "127.0.0.1",
-  async fetch(req) {
+  async fetch(req, server) {
     const url = new URL(req.url);
     if (url.pathname.startsWith("/api/") && url.pathname !== "/api/bye") {
       lastSeen = Date.now();
@@ -251,50 +515,103 @@ const server = Bun.serve({
       case "/":
         return new Response(Bun.file(join(publicDir, "index.html")));
       case "/api/info": {
+        // An empty page: nothing has been opened yet.
+        if (!session) return json({ cuePath: "", peaks: PEAKS_FORMAT, peakCount: 0, done: true, error: "" });
+        const s = session;
         // Re-read so that a reload picks up edits made to the sheet elsewhere.
-        cueText = await readCueText();
-        const s = parseCue(cueText);
-        const baseline = await readBaseline(s.tracks.length);
+        const sheet = parseCue(await readLatin1(s.cuePath));
+        const baseline = await readBaseline(s, sheet.tracks.length);
         return json({
-          cuePath,
-          cueName: basename(cuePath),
-          audioName: basename(audioPath),
-          title: s.title,
-          performer: s.performer,
-          sampleRate,
+          cuePath: s.cuePath,
+          cueName: basename(s.cuePath),
+          audioName: basename(s.audio.key.path),
+          title: sheet.title,
+          performer: sheet.performer,
+          sampleRate: s.audio.sampleRate,
+          duration: s.audio.duration,
           // Format of /api/peaks; the page refuses to run against another.
           peaks: PEAKS_FORMAT,
-          frames: decode.frames,
-          done: decode.done,
-          error: decode.error,
-          tracks: s.tracks,
+          // PCM decoded so far, which /api/pcm serves; the whole file once done.
+          frames: s.audio.frames,
+          // Frames in the whole file, or 0 while that is not known yet.
+          length: s.audio.length,
+          // Peak entries available from /api/peaks so far.
+          peakCount: s.audio.peakCount,
+          done: s.audio.done,
+          error: s.audio.error,
+          tracks: sheet.tracks,
           // INDEX values to measure Δ from; empty when none fits the sheet.
           baseline: baseline.indexes,
-          // Name of the .bak they came from; empty when it is the startup state.
+          // Name of the .bak they came from; empty when it is the state as opened.
           baselineSource: baseline.source,
         });
       }
+      case "/api/recent":
+        // Sheets that have gone missing since are left out, but stay in the
+        // file in case their disk comes back.
+        return json(
+          readRecent()
+            .filter((p) => p !== session?.cuePath && existsSync(p))
+            .map((path) => ({ path, name: basename(path), folder: tilde(dirname(path)) })),
+        );
       case "/api/peaks":
-        return new Response(peaksBody(), { headers: { "content-type": "application/octet-stream" } });
+        // ?from=n returns the entries from n on, for a page that has the rest.
+        if (!session) return new Response(new Uint8Array(0));
+        return new Response(peaksBody(session.audio, Math.max(0, Math.floor(Number(url.searchParams.get("from")) || 0))), {
+          headers: { "content-type": "application/octet-stream" },
+        });
       case "/api/pcm": {
+        const a = session?.audio;
+        if (!a) return new Response(new Uint8Array(0));
         const start = Math.max(0, Math.floor(Number(url.searchParams.get("start"))));
         const count = Math.max(0, Math.floor(Number(url.searchParams.get("count"))));
-        const end = Math.min(decode.frames, start + count);
-        if (!decode.done || end <= start) return new Response(new Uint8Array(0));
-        return new Response(Bun.file(pcmPath).slice(start * BYTES_PER_FRAME, end * BYTES_PER_FRAME), {
+        // Clipped to what has been decoded so far.
+        const end = Math.min(a.frames, start + count);
+        if (end <= start) return new Response(new Uint8Array(0));
+        return new Response(Bun.file(a.pcmPath).slice(start * BYTES_PER_FRAME, end * BYTES_PER_FRAME), {
           headers: { "content-type": "application/octet-stream" },
         });
       }
       case "/api/save": {
         if (req.method !== "POST") return json({ error: "POST only" }, 405);
+        if (!sameOrigin(req)) return json({ error: "cross-origin request" }, 403);
         try {
-          const { indexes } = (await req.json()) as { indexes: number[] };
+          const { indexes, cuePath } = (await req.json()) as { indexes: number[]; cuePath?: string };
           if (!Array.isArray(indexes) || !indexes.every((n) => Number.isInteger(n) && n >= 0)) {
             return json({ error: "indexes must be non-negative integers" }, 400);
           }
-          return json(await save(indexes));
+          // A page left open on the previous sheet must not write into this one.
+          if (!session || (cuePath !== undefined && cuePath !== session.cuePath)) {
+            return json({ error: "another cue sheet has been opened since; reload the page" }, 409);
+          }
+          return json(await save(session, indexes));
         } catch (e) {
           return json({ error: (e as Error).message }, 500);
+        }
+      }
+      case "/api/open": {
+        // Opens { path } if given, otherwise asks for one with the file dialog.
+        if (req.method !== "POST") return json({ error: "POST only" }, 405);
+        if (!sameOrigin(req)) return json({ error: "cross-origin request" }, 403);
+        let path = "";
+        try {
+          path = String(((await req.json().catch(() => ({}))) as { path?: unknown }).path ?? "");
+          if (!path) {
+            if (choosing) return json({ error: "the file dialog is already open" }, 409);
+            // Bun closes requests idle for 10 s; choosing a file takes longer.
+            server.timeout(req, 0);
+            choosing = true;
+            try {
+              path = await chooseSheet();
+            } finally {
+              choosing = false;
+            }
+            if (!path) return json({ cancelled: true });
+          }
+          const s = await openSheet(path);
+          return json({ cuePath: s.cuePath });
+        } catch (e) {
+          return json({ error: (e as Error).message }, 400);
         }
       }
       case "/api/bye":
@@ -307,6 +624,8 @@ const server = Bun.serve({
   },
 });
 
-const pageUrl = `http://127.0.0.1:${server.port}/`;
+// A name rather than 127.0.0.1, which is what Safari shows in its address
+// field. macOS resolves every *.localhost name to this machine.
+const pageUrl = `http://cue-edit.localhost:${server.port}/`;
 console.error(`cue-edit: ${pageUrl}`);
 if (openBrowser) Bun.spawn(["open", pageUrl]);

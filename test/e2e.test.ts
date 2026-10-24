@@ -3,7 +3,16 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { type Browser, type Page, chromium } from "playwright";
-import { type Fixture, type Server, STARTUP_INDEXES, exitsWithin, indexesOf, makeFixture, startServer } from "./helpers";
+import {
+  type Fixture,
+  type Server,
+  SHEET,
+  STARTUP_INDEXES,
+  exitsWithin,
+  indexesOf,
+  makeFixture,
+  startServer,
+} from "./helpers";
 
 let browser: Browser;
 let fixture: Fixture;
@@ -29,10 +38,10 @@ afterEach(async () => {
   fixture.cleanup();
 });
 
-// The page is ready once the decoding notice is gone.
+// The page is ready once the decoding notice is hidden.
 async function openPage() {
   await page.goto(server.url);
-  await page.waitForSelector("#loading", { state: "detached" });
+  await page.waitForSelector("#loading", { state: "hidden" });
 }
 
 const rows = () =>
@@ -140,6 +149,119 @@ describe("editing", () => {
     // Stops one cue frame before the next split point.
     expect(await column(1)).toEqual(["00:00:00", "00:39:74", "00:40:00"]);
   });
+});
+
+describe("opening a sheet", () => {
+  // The file dialog cannot be driven from a test, so the request that would
+  // show it carries a path instead, as if it had been chosen there.
+  const choose = (path: string) =>
+    page.route("**/api/open", (route) =>
+      route.continue({ postData: JSON.stringify({ path }), headers: { ...route.request().headers(), "content-type": "application/json" } }),
+    );
+
+  test("an empty page opens a sheet with ⌘O", async () => {
+    await server.stop();
+    server = await startServer(null);
+    await page.goto(server.url);
+    await page.waitForSelector("#loading button");
+    expect(await page.textContent("#files")).toBe("No cue sheet open");
+    expect(await page.title()).toBe("cue-edit");
+
+    await choose(fixture.cue);
+    await press("Meta+o");
+    await page.waitForSelector("#loading", { state: "hidden" });
+    expect(await column(1)).toEqual(["00:00:00", "00:20:00", "00:40:00"]);
+    expect(await page.title()).toBe("mix.cue");
+  });
+
+  test("asks before discarding unsaved split points", async () => {
+    const other = await makeFixture(SHEET.replace("INDEX 01 00:40:00", "INDEX 01 00:45:00"));
+    try {
+      await choose(other.cue);
+      await press("]");
+      await press("Shift+ArrowRight");
+      await press("m");
+
+      // Declining keeps the edit and the sheet.
+      page.once("dialog", (d) => d.dismiss());
+      await page.click("#open");
+      await frames();
+      expect(await column(1)).toEqual(["00:00:00", "00:20:01", "00:40:00"]);
+
+      // The page is not reloaded: Safari showed the previous sheet for two
+      // seconds while it tore the old page down.
+      await page.evaluate(() => ((window as any).samePage = true));
+      page.once("dialog", (d) => d.accept());
+      await page.click("#open");
+      await page.waitForFunction(() => document.querySelector("#track-rows tr:last-child td:nth-child(2)")?.textContent === "00:45:00");
+      expect(await page.title()).toBe("mix.cue");
+      expect(await column(2)).toEqual(["", "", ""]);
+      expect(await indexesOf(fixture.cue)).toEqual(STARTUP_INDEXES);
+      expect(await page.evaluate(() => (window as any).samePage)).toBe(true);
+      // Nothing of the previous sheet is left: no undo, no edited marks.
+      await press("Meta+z");
+      expect(await column(1)).toEqual(["00:00:00", "00:20:00", "00:45:00"]);
+      expect(await page.isDisabled("#save")).toBe(true);
+    } finally {
+      other.cleanup();
+    }
+  });
+
+  test("reopens a recent sheet from the empty page and from the menu", async () => {
+    const other = await makeFixture(SHEET.replace("INDEX 01 00:40:00", "INDEX 01 00:45:00"));
+    try {
+      // The fixture sheet was opened at startup; a later run lists it.
+      await server.stop({ keepState: true });
+      server = await startServer(null, { CUE_EDIT_STATE_DIR: server.stateDir });
+      await page.goto(server.url);
+      await page.click(".empty .recent-item");
+      await page.waitForSelector("#loading", { state: "hidden" });
+      expect(await column(1)).toEqual(["00:00:00", "00:20:00", "00:40:00"]);
+
+      await choose(other.cue);
+      await press("Meta+o");
+      await page.waitForFunction(() => document.querySelector("#track-rows tr:last-child td:nth-child(2)")?.textContent === "00:45:00");
+
+      // The menu offers the first sheet (not the open one), and goes back to it.
+      await page.unroute("**/api/open");
+      await page.click("#recent");
+      await page.waitForSelector("#recent-menu .recent-item");
+      const items = await page.$$eval("#recent-menu .recent-item", (els) => els.map((el) => el.getAttribute("title")));
+      expect(items).toEqual([fixture.cue]);
+      await press("Escape");
+      expect(await page.isHidden("#recent-menu")).toBe(true);
+      await page.click("#recent");
+      await page.click("#recent-menu .recent-item");
+      await page.waitForFunction(() => document.querySelector("#track-rows tr:last-child td:nth-child(2)")?.textContent === "00:40:00");
+    } finally {
+      other.cleanup();
+    }
+  });
+
+  test("reports a sheet that cannot be opened", async () => {
+    await choose(`${fixture.dir}/nope.cue`);
+    await page.click("#open");
+    await page.waitForFunction(() => document.querySelector("#toast")?.classList.contains("error"));
+    expect(await page.textContent("#toast")).toContain("Cannot open: cue sheet not found");
+    expect(await column(1)).toEqual(["00:00:00", "00:20:00", "00:40:00"]);
+  });
+});
+
+describe("while decoding", () => {
+  test("the page works before the audio is decoded", async () => {
+    await server.stop();
+    server = await startServer(fixture.cue, { CUE_EDIT_READRATE: "10" });
+    await openPage();
+    // Usable at once: the tracks are listed and split points can be selected.
+    expect(await page.isVisible("#progress")).toBe(true);
+    expect(await page.textContent("#progress")).toMatch(/^Decoding \d+%$/);
+    expect(await column(1)).toEqual(["00:00:00", "00:20:00", "00:40:00"]);
+    await press("]");
+    expect(await pos()).toBe("0:20.000 (00:20:00)");
+    // The progress goes away once decoding is done.
+    await page.waitForSelector("#progress", { state: "hidden", timeout: 15000 });
+    expect(await page.textContent("#files")).toBe("mix.cue · mix.aac · 1:00.024");
+  }, 25000);
 });
 
 describe("server lifetime", () => {

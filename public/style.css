@@ -76,6 +76,14 @@ header {
   min-width: 31ch;
 }
 
+#progress {
+  color: var(--accent);
+}
+
+#progress[hidden] {
+  display: none;
+}
+
 .dim {
   color: var(--dim);
 }
@@ -127,6 +135,86 @@ canvas {
   place-items: center;
   color: var(--dim);
   font-size: 16px;
+}
+
+#loading[hidden] {
+  display: none;
+}
+
+/* The empty page: the Open button, with the recent sheets under it. */
+.empty {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  max-width: min(640px, 90%);
+}
+
+.open-group {
+  position: relative;
+}
+
+#open {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+#recent {
+  border-left: none;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  padding: 2px 6px;
+}
+
+#recent-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  width: max-content;
+  max-width: min(640px, 90vw);
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid #3a404c;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+
+/* .recent-list sets display, which would otherwise override [hidden]. */
+#recent-menu[hidden] {
+  display: none;
+}
+
+.recent-list {
+  display: grid;
+  gap: 2px;
+  font-size: 13px;
+  white-space: normal;
+}
+
+.recent-item {
+  display: grid;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 4px 8px;
+  max-width: 100%;
+}
+
+.recent-item:hover,
+.recent-item:focus {
+  background: #2c313b;
+  outline: none;
+}
+
+.recent-item > *,
+.recent-item {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-none {
+  padding: 4px 8px;
 }
 
 #tracks {

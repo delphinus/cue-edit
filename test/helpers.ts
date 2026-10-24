@@ -73,20 +73,30 @@ export async function makeFixture(sheet = SHEET): Promise<Fixture> {
   return { dir, cue, bak: `${cue}.bak`, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-export type Server = { url: string; proc: Subprocess; stop: () => Promise<void> };
+export type Server = {
+  url: string;
+  proc: Subprocess;
+  stateDir: string;
+  // keepState leaves the state directory for a later server to share.
+  stop: (opts?: { keepState?: boolean }) => Promise<void>;
+};
 
 // Resolves to true if the process exits within `ms`.
 export async function exitsWithin(proc: Subprocess, ms: number): Promise<boolean> {
   return Promise.race([proc.exited.then(() => true), Bun.sleep(ms).then(() => false)]);
 }
 
-// Starts cue-edit on a free port and waits for it to report its URL. `env`
-// can shorten the keep-alive limits (CUE_EDIT_PING_LIMIT_MS and friends).
-export async function startServer(cue: string, env: Record<string, string> = {}): Promise<Server> {
-  const proc = Bun.spawn(["bun", join(ROOT, "cue-edit.ts"), cue, "--no-open"], {
+// Starts cue-edit on a free port and waits for it to report its URL; with
+// `cue` null it starts without a sheet. `env` can shorten the keep-alive
+// limits (CUE_EDIT_PING_LIMIT_MS and friends), or pass on the CUE_EDIT_STATE_DIR
+// of an earlier server; by default each server gets its own, so that the
+// tests never touch the list of recent sheets of whoever runs them.
+export async function startServer(cue: string | null, env: Record<string, string> = {}): Promise<Server> {
+  const stateDir = env.CUE_EDIT_STATE_DIR ?? mkdtempSync(join(tmpdir(), "cue-edit-state-"));
+  const proc = Bun.spawn(["bun", join(ROOT, "cue-edit.ts"), ...(cue ? [cue] : []), "--no-open"], {
     stderr: "pipe",
     stdout: "ignore",
-    env: { ...process.env, ...env },
+    env: { ...process.env, ...env, CUE_EDIT_STATE_DIR: stateDir },
   });
   const reader = proc.stderr.getReader();
   const decoder = new TextDecoder();
@@ -98,13 +108,18 @@ export async function startServer(cue: string, env: Record<string, string> = {})
     log += decoder.decode(value);
     url = log.match(/cue-edit: (http:\/\/\S+)/)?.[1] ?? "";
   }
+  // The page is opened at cue-edit.localhost, which macOS resolves to this
+  // machine; not every resolver does (CI runs on Linux), so connect directly.
+  url = url.replace("//cue-edit.localhost:", "//127.0.0.1:");
   reader.releaseLock();
   return {
     url,
     proc,
-    stop: async () => {
+    stateDir,
+    stop: async ({ keepState = false } = {}) => {
       proc.kill();
       await proc.exited;
+      if (!keepState) rmSync(stateDir, { recursive: true, force: true });
     },
   };
 }

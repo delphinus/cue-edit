@@ -20,13 +20,28 @@ for macOS keyboards and trackpads.
 ## Usage
 
 ```sh
-bun cue-edit.ts path/to/mix.cue [--port <n>] [--no-open]
+bun cue-edit.ts [path/to/mix.cue] [--port <n>] [--no-open]
 ```
 
-The audio named in the sheet's `FILE` line is decoded once into a temporary
-directory (about 5 seconds for a 70-minute mix), then the page opens in the
-default browser. The server exits a few seconds after the page is closed and
+The audio named in the sheet's `FILE` line is decoded into a temporary
+directory (about 8 seconds for a 2¾-hour mix). The page is usable at once:
+the waveform fills in as decoding goes, and playback can go as far as it has
+reached (the part not decoded yet is shaded in the overview). The waveform is
+kept in `~/.local/state/cue-edit/peaks/` for the last 20 audio files, so a mix
+opened before shows all of it straight away; switching back to the sheet open
+before does not decode its audio again. The server exits a few seconds after the page is closed and
 removes its temporary files.
+
+Without a sheet the page opens empty. The Open button (⌘O) shows the macOS
+file dialog, and can also switch to another sheet later; the page asks first
+if there are unsaved split points. The dialog is shown by the server with
+`osascript`, because a browser gives a page the contents of a file but not its
+path, and the server needs the path to find the audio and to save in place.
+
+The last ten sheets opened are listed on the empty page and under ▾ next to
+the Open button, and the dialog starts in the folder of the last one. The list
+is kept in `~/.local/state/cue-edit/recent.json` (`$XDG_STATE_HOME/cue-edit`
+when that is set), so it carries over to the next run.
 
 If the browser does not report the closing, the server exits after five
 minutes without a word from a visible page, or twelve hours when the page was
@@ -55,6 +70,7 @@ removed; the editor moves existing split points only.
 | 0 | Show the whole file |
 | L | Switch the waveform between the dB and linear scales |
 | ⌘Z ⇧⌘Z | Undo / redo |
+| ⌘O | Open another cue sheet |
 | ⌘S | Save (a notification confirms it) |
 | Esc | Cancel a drag, clear the selection |
 | ? | Help and settings |
