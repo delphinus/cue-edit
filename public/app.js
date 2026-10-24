@@ -207,6 +207,8 @@ function preview(which) {
     [b, b + len],
   ];
   const [from, to] = ranges[which];
+  // Normal playback may have scrolled the selection out of view.
+  ensureVisible(which < 2 ? a : b);
   player.play(Math.max(0, from), to, { preview: true, onEnd: draw });
   draw();
 }
