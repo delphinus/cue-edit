@@ -185,6 +185,17 @@ describe("editing", () => {
     expect(await pos()).toBe("0:00.000 (00:00:00)");
     expect((await rows()).map((r) => r.selected)).toEqual([true, false, false]);
   });
+
+  test("while playing, 1 previews from the playhead once the cursor is off screen", async () => {
+    const secsAt = async () => Number((await pos())!.match(/^0:(\d+\.\d+)/)![1]);
+    const zoom = async () => Number((await page.textContent("#zoom"))!.replace(" s", ""));
+    await press("]");
+    while ((await zoom()) > 0.5) await press("i");
+    await press("Space");
+    await page.waitForTimeout(1500);
+    await press("1");
+    expect(await secsAt()).toBeGreaterThan(20.8);
+  });
 });
 
 describe("opening a sheet", () => {
