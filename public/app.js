@@ -34,6 +34,13 @@ const secs = (s) => Math.round(s * S.sr);
 // Selection edges sit on cue frames (1/75 s), the only positions an INDEX can
 // hold, so that a split point put on the selection lines up with it exactly.
 const snap = (f) => clamp(cueToFrame(Math.round((f * CUE_FPS) / S.sr)), 0, S.frames);
+// The cursor sits on the start of the cue frame it is in (the left edge of its
+// bar when zoomed in), the INDEX that the position shows; the end of the file
+// stays reachable.
+const cueStart = (f) => {
+  const g = clamp(f, 0, S.frames);
+  return g >= S.frames ? S.frames : cueToFrame(frameToCue(g));
+};
 function selectRange(x, y) {
   if (x === y) return { a: x, b: x };
   const a = snap(Math.min(x, y));
@@ -190,7 +197,7 @@ function togglePlay() {
   if (player.playing) {
     const wasPreview = player.preview;
     const at = player.stop();
-    if (!wasPreview && at !== null) S.pos = at;
+    if (!wasPreview && at !== null) S.pos = cueStart(at);
   } else {
     player.play(S.pos, S.frames, { onEnd: () => (S.pos = S.frames) });
   }
@@ -202,7 +209,7 @@ function preview(which) {
   // playback started. Once that is off screen, preview from the playhead
   // (the centre of the view) instead of jumping back to it.
   if (playing() && S.sel.b <= S.sel.a && (S.pos < S.view.start || S.pos > viewEnd())) {
-    S.pos = player.position();
+    S.pos = cueStart(player.position());
     S.sel = { a: S.pos, b: S.pos };
   }
   const { a, b } = selOrCursor();
@@ -222,7 +229,7 @@ function preview(which) {
 
 // Jumps the cursor; with `restart`, normal playback continues from there.
 function setPos(f, { follow = true, restart = true } = {}) {
-  S.pos = clamp(Math.round(f), 0, S.frames);
+  S.pos = cueStart(f);
   if (restart && player.playing && !player.preview) player.play(S.pos, S.frames, { onEnd: () => (S.pos = S.frames) });
   if (follow) ensureVisible(S.pos);
   draw();
@@ -1043,6 +1050,7 @@ overlay.addEventListener("pointerup", () => {
 
 // A click moves the cursor; outside the selection it also clears it.
 function clickAt(f, { restart = true } = {}) {
+  f = cueStart(f);
   if (f < S.sel.a || f > S.sel.b) S.sel = { a: f, b: f };
   setPos(f, { follow: false, restart });
 }
@@ -1099,7 +1107,7 @@ overview.addEventListener("pointerdown", (e) => {
 overview.addEventListener("pointermove", (e) => {
   if (S.drag?.kind !== "overview") return;
   S.drag.moved = true;
-  S.pos = Math.round(overviewFrame(e));
+  S.pos = cueStart(overviewFrame(e));
   centerOn(S.pos);
 });
 overview.addEventListener("pointerup", () => {

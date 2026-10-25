@@ -186,6 +186,21 @@ describe("editing", () => {
     expect((await rows()).map((r) => r.selected)).toEqual([true, false, false]);
   });
 
+  test("a click puts the cursor on the start of the cue frame under it", async () => {
+    const zoom = async () => Number((await page.textContent("#zoom"))!.replace(" s", ""));
+    await press("]");
+    while ((await zoom()) > 0.5) await press("i");
+    const box = (await page.locator("#overlay").boundingBox())!;
+    // A third of the way into a bar, wherever the bars fall.
+    for (const x of [0.3, 0.55, 0.8]) {
+      await page.mouse.click(box.x + box.width * x, box.y + box.height / 2);
+      await frames();
+      const [, m, s, ms, mm, ss, ff] = (await pos())!.match(/^(\d+):(\d+)\.(\d+) \((\d+):(\d+):(\d+)\)$/)!.map(Number);
+      const secs = m * 60 + s + ms / 1000;
+      expect(Math.abs(secs - (mm * 60 + ss + ff / 75))).toBeLessThan(0.0006);
+    }
+  });
+
   test("while playing, 1 previews from the playhead once the cursor is off screen", async () => {
     const secsAt = async () => Number((await pos())!.match(/^0:(\d+\.\d+)/)![1]);
     const zoom = async () => Number((await page.textContent("#zoom"))!.replace(" s", ""));
