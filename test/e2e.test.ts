@@ -149,6 +149,42 @@ describe("editing", () => {
     // Stops one cue frame before the next split point.
     expect(await column(1)).toEqual(["00:00:00", "00:39:74", "00:40:00"]);
   });
+
+  test("[ goes to the start of the current track unless on a split point", async () => {
+    const selected = async () => (await rows()).findIndex((r) => r.selected);
+    await press("]");
+    await press("ArrowRight");
+    await press("[");
+    expect(await pos()).toBe("0:20.000 (00:20:00)");
+    expect(await selected()).toBe(1);
+    // On the split point, it goes on to the previous track.
+    await press("[");
+    expect(await pos()).toBe("0:00.000 (00:00:00)");
+    expect(await selected()).toBe(0);
+  });
+
+  test("while playing, keys move from the playhead as on a music player", async () => {
+    const secsAt = async () => Number((await pos())!.match(/^0:(\d+\.\d+)/)![1]);
+    await press("]");
+    await press("Space");
+    await page.waitForTimeout(500);
+    // → seeks from the playhead, not from where playback started.
+    await press("ArrowRight");
+    expect(await secsAt()).toBeGreaterThan(21.2);
+    await press("Alt+ArrowLeft"); // back to about 0:06
+    await press("PageDown");
+    await press("PageDown");
+    expect(await secsAt()).toBeGreaterThan(30);
+
+    // Past the first 3 s, [ goes back to the start of the track being played…
+    await press("[");
+    expect(await pos()).toBe("0:20.000 (00:20:00)");
+    expect((await rows()).map((r) => r.selected)).toEqual([false, true, false]);
+    // …and within them, to the previous track. ⌃← does the same.
+    await press("Control+ArrowLeft");
+    expect(await pos()).toBe("0:00.000 (00:00:00)");
+    expect((await rows()).map((r) => r.selected)).toEqual([true, false, false]);
+  });
 });
 
 describe("opening a sheet", () => {

@@ -270,13 +270,25 @@ function selectCue(i, { jump = true } = {}) {
   draw();
 }
 
+// Where keys move from: the playhead while playing, as on a music player,
+// rather than where playback started.
+const playing = () => player.playing && !player.preview;
+const here = () => (playing() ? player.position() : S.pos);
+
+// [ goes back to the start of the current track, or to the previous one when
+// already on its split point. While playing, it goes to the previous one within
+// the first PREV_GRACE seconds of the track, as a music player does.
+const PREV_GRACE = 3;
 function neighbourCue(dir) {
-  const here = frameToCue(S.pos);
+  const at = here();
   if (dir < 0) {
-    for (let i = S.cues.length - 1; i >= 0; i--) if (S.cues[i] < here) return i;
+    const started = playing()
+      ? (i) => at - cueToFrame(S.cues[i]) >= secs(PREV_GRACE)
+      : (i) => S.cues[i] < frameToCue(at);
+    for (let i = S.cues.length - 1; i >= 0; i--) if (started(i)) return i;
     return 0;
   }
-  for (let i = 0; i < S.cues.length; i++) if (S.cues[i] > here) return i;
+  for (let i = 0; i < S.cues.length; i++) if (S.cues[i] > frameToCue(at)) return i;
   return S.cues.length - 1;
 }
 
@@ -1172,14 +1184,14 @@ window.addEventListener("keydown", (e) => {
     case "ArrowRight": {
       const dir = code === "ArrowLeft" ? -1 : 1;
       if (e.ctrlKey) selectCue(neighbourCue(dir));
-      else if (e.altKey) setPos(S.pos + dir * step(settings.large));
-      else if (e.shiftKey) setPos(cueToFrame(frameToCue(S.pos) + dir));
-      else setPos(S.pos + dir * step(settings.small));
+      else if (e.altKey) setPos(here() + dir * step(settings.large));
+      else if (e.shiftKey) setPos(cueToFrame(frameToCue(here()) + dir));
+      else setPos(here() + dir * step(settings.small));
       break;
     }
     case "PageUp":
     case "PageDown":
-      setPos(S.pos + (code === "PageUp" ? -1 : 1) * step(settings.large));
+      setPos(here() + (code === "PageUp" ? -1 : 1) * step(settings.large));
       break;
     // Selection edges, or the ends of the file when nothing is selected.
     case "ArrowUp":

@@ -64,7 +64,7 @@ removed; the editor moves existing split points only.
 | ⌥← ⌥→, PageUp PageDown | Move the cursor by the large step (15 s) |
 | ⇧← ⇧→ | Move the cursor by one cue frame (1/75 s) |
 | ↑ ↓ | Cursor to the selection start / end; to the start / end of the file when nothing is selected |
-| [ ] | Cursor to the previous / next split point and select it; clears the selection, so 1 and 2 preview around the split point |
+| [ ] | Cursor to the start of the current track (the previous one when already on its split point) / to the next split point, and select it; clears the selection, so 1 and 2 preview around the split point |
 | M / ⇧M | Move the selected split point to the selection start / end |
 | I O (= −) | Zoom in / out |
 | 0 | Show the whole file |
@@ -74,6 +74,10 @@ removed; the editor moves existing split points only.
 | ⌘S | Save (a notification confirms it) |
 | Esc | Cancel a drag, clear the selection |
 | ? | Help and settings |
+
+While playing, the cursor keys move from the playhead, as on a music player:
+← → seek from where the sound is, and [ goes back to the previous track
+instead within the first 3 s of a track.
 
 ⌃← ⌃→ also jump between split points, but macOS uses them to switch Spaces
 unless that shortcut is turned off in System Settings.
