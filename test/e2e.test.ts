@@ -142,12 +142,12 @@ describe("editing", () => {
     expect(cue(nudged!) - cue(moved!)).toBe(1);
   });
 
-  test("keeps split points in order", async () => {
-    await press("]");
-    await press("ArrowDown"); // cursor to the end of the file
+  test("M moves the split point nearest to the cursor, not the selected one", async () => {
+    await press("]"); // selects the split point at 0:20
+    await press("Alt+ArrowRight"); // cursor to 0:35, nearer to 0:40
     await press("m");
-    // Stops one cue frame before the next split point.
-    expect(await column(1)).toEqual(["00:00:00", "00:39:74", "00:40:00"]);
+    expect(await column(1)).toEqual(["00:00:00", "00:20:00", "00:35:00"]);
+    expect((await rows()).map((r) => r.selected)).toEqual([false, false, true]);
   });
 
   test("[ goes to the start of the current track unless on a split point", async () => {

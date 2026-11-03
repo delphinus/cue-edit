@@ -65,7 +65,7 @@ removed; the editor moves existing split points only.
 | ⇧← ⇧→ | Move the cursor by one cue frame (1/75 s) |
 | ↑ ↓ | Cursor to the selection start / end; to the start / end of the file when nothing is selected |
 | [ ] | Cursor to the start of the current track (the previous one when already on its split point) / to the next split point, and select it; clears the selection, so 1 and 2 preview around the split point |
-| M / ⇧M | Move the selected split point to the selection start / end |
+| M / ⇧M | Move the split point nearest to the selection start / end there |
 | I O (= −) | Zoom in / out |
 | 0 | Show the whole file |
 | L | Switch the waveform between the dB and linear scales |

@@ -1042,7 +1042,7 @@ overlay.addEventListener("pointerup", () => {
   // Editing in the waveform leaves playback running where it is.
   if (!d.moved) return clickAt(d.anchor, { restart: false });
   // A new selection usually brackets a transition: pick the split point
-  // nearest to it so that M (or ↑ while dragging) acts on it right away.
+  // nearest to it so that ↑ while dragging acts on it right away.
   S.selectedCue = nearestCue(S.sel.a);
   renderTracks();
   setPos(S.sel.a, { follow: false, restart: false });
@@ -1248,9 +1248,16 @@ window.addEventListener("keydown", (e) => {
       draw();
       toast(settings.scale === "db" ? "Waveform: dB scale" : "Waveform: linear scale");
       break;
+    // The split point nearest to where it goes, not the selected one: one
+    // left selected from earlier would otherwise jump here by surprise.
     case "KeyM": {
       const { a, b } = selOrCursor();
-      moveCue(S.selectedCue, e.shiftKey ? b : a);
+      const f = e.shiftKey ? b : a;
+      const i = nearestCue(f);
+      S.selectedCue = i;
+      moveCue(i, f);
+      renderTracks();
+      draw();
       break;
     }
     case "Escape":
