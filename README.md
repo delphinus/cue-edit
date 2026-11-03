@@ -58,7 +58,7 @@ removed; the editor moves existing split points only.
 | --- | --- |
 | Space | Play / stop from the cursor |
 | 1 2 (F5 F6) | Play the preview length before / from the selection start |
-| 3 4 (, .) | Move the selection by one cue frame; with ⇧, ten |
+| 3 4 (, .) | Move the selection by one cue frame; with ⇧, ten. Held down, it speeds up |
 | F7 F8 | Play the preview length before / from the selection end |
 | ← → | Move the cursor by the small step (1 s) |
 | ⌥← ⌥→, PageUp PageDown | Move the cursor by the large step (15 s) |

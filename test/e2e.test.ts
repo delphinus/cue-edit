@@ -142,6 +142,16 @@ describe("editing", () => {
     expect(cue(nudged!) - cue(moved!)).toBe(1);
   });
 
+  test("holding 4 speeds up", async () => {
+    await press("]");
+    await page.keyboard.down("4"); // one cue frame
+    await page.waitForTimeout(1200);
+    await page.keyboard.down("4"); // a repeat after 1.2 s: four cue frames
+    await page.keyboard.up("4");
+    await frames();
+    expect(await pos()).toBe("0:20.067 (00:20:05)");
+  });
+
   test("M moves the split point nearest to the cursor, not the selected one", async () => {
     await press("]"); // selects the split point at 0:20
     await press("Alt+ArrowRight"); // cursor to 0:35, nearer to 0:40

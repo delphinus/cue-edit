@@ -308,6 +308,17 @@ function neighbourCue(dir) {
   return S.cues.length - 1;
 }
 
+// Holding 3 / 4 speeds up: the step doubles every half second after the first,
+// up to 32 cue frames per key repeat, so long moves need no other keys.
+const NUDGE_DELAY = 0.5;
+const NUDGE_MAX = 32;
+let nudgeHeld = 0;
+function nudgeStep(e) {
+  if (!e.repeat) nudgeHeld = performance.now();
+  const t = (performance.now() - nudgeHeld) / 1000;
+  return t < NUDGE_DELAY ? 1 : Math.min(NUDGE_MAX, 2 ** Math.floor(t / NUDGE_DELAY));
+}
+
 function nudgeSelection(frames) {
   if (S.sel.b > S.sel.a) {
     const len = S.sel.b - S.sel.a;
@@ -1231,7 +1242,7 @@ window.addEventListener("keydown", (e) => {
       break;
     case "Digit3":
     case "Digit4":
-      nudgeSelection((code === "Digit3" ? -1 : 1) * (e.shiftKey ? 10 : 1) * (S.sr / CUE_FPS));
+      nudgeSelection((code === "Digit3" ? -1 : 1) * (e.shiftKey ? 10 : 1) * nudgeStep(e) * (S.sr / CUE_FPS));
       break;
     case "Digit0":
       setView(0, maxSpp());
@@ -1277,7 +1288,7 @@ window.addEventListener("keydown", (e) => {
       case "<":
       case ".":
       case ">":
-        nudgeSelection((key === "," || key === "<" ? -1 : 1) * (e.shiftKey ? 10 : 1) * (S.sr / CUE_FPS));
+        nudgeSelection((key === "," || key === "<" ? -1 : 1) * (e.shiftKey ? 10 : 1) * nudgeStep(e) * (S.sr / CUE_FPS));
         break;
       case "[":
         selectCue(neighbourCue(-1));
