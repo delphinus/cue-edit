@@ -78,7 +78,8 @@ removed; the editor moves existing split points only.
 While playing, the cursor keys move from the playhead, as on a music player:
 ← → seek from where the sound is, and [ goes back to the previous track
 instead within the first 3 s of a track. With nothing selected, the previews
-(1 2 F5–F8) also start from the playhead once the cursor is off screen.
+(1 2 F5–F8) also start from the playhead once the cursor is off screen, unless
+the cursor was put there by a click: that place is kept to come back to.
 
 ⌃← ⌃→ also jump between split points, but macOS uses them to switch Spaces
 unless that shortcut is turned off in System Settings.

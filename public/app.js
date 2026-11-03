@@ -207,8 +207,10 @@ function togglePlay() {
 function preview(which) {
   // While playing, the view follows the playhead and leaves the cursor where
   // playback started. Once that is off screen, preview from the playhead
-  // (the centre of the view) instead of jumping back to it.
-  if (playing() && S.sel.b <= S.sel.a && (S.pos < S.view.start || S.pos > viewEnd())) {
+  // (the centre of the view) instead of jumping back to it. A cursor put
+  // somewhere else by a click is kept: it marks a place to come back to.
+  const stale = S.pos === player.from;
+  if (playing() && stale && S.sel.b <= S.sel.a && (S.pos < S.view.start || S.pos > viewEnd())) {
     S.pos = cueStart(player.position());
     S.sel = { a: S.pos, b: S.pos };
   }

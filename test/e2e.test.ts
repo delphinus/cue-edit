@@ -211,6 +211,24 @@ describe("editing", () => {
     await press("1");
     expect(await secsAt()).toBeGreaterThan(20.8);
   });
+
+  test("while playing, 1 previews from a clicked cursor even off screen", async () => {
+    const secsAt = async () => Number((await pos())!.match(/^0:(\d+\.\d+)/)![1]);
+    const zoom = async () => Number((await page.textContent("#zoom"))!.replace(" s", ""));
+    await press("]");
+    while ((await zoom()) > 0.5) await press("i");
+    await press("Space");
+    await page.waitForTimeout(300);
+    const box = (await page.locator("#overlay").boundingBox())!;
+    // Right of the playhead, in case playback has not started moving yet.
+    await page.mouse.click(box.x + box.width * 0.75, box.y + box.height / 2);
+    await frames();
+    const clicked = await secsAt();
+    expect(clicked).toBeGreaterThan(20.1);
+    await page.waitForTimeout(1500); // the playhead scrolls the click out of view
+    await press("1");
+    expect(await secsAt()).toBe(clicked);
+  });
 });
 
 describe("opening a sheet", () => {
