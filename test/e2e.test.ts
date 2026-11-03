@@ -222,6 +222,22 @@ describe("editing", () => {
     expect(await secsAt()).toBeGreaterThan(20.8);
   });
 
+  test("2 brings the cursor to the centre of the view before playing", async () => {
+    const zoom = async () => Number((await page.textContent("#zoom"))!.replace(" s", ""));
+    await press("]");
+    while ((await zoom()) > 0.5) await press("i");
+    const box = (await page.locator("#overlay").boundingBox())!;
+    await page.mouse.click(box.x + box.width * 0.9, box.y + box.height / 2);
+    await frames();
+    const clicked = await pos();
+    await press("2");
+    await press("Space"); // stop the preview
+    // A click in the middle lands on the same cue frame.
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await frames();
+    expect(await pos()).toBe(clicked);
+  });
+
   test("while playing, 1 previews from a clicked cursor even off screen", async () => {
     const secsAt = async () => Number((await pos())!.match(/^0:(\d+\.\d+)/)![1]);
     const zoom = async () => Number((await page.textContent("#zoom"))!.replace(" s", ""));

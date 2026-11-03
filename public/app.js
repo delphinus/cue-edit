@@ -204,7 +204,9 @@ function togglePlay() {
   draw();
 }
 
-function preview(which) {
+// With `center`, the point listened around is brought to the middle of the
+// view first, so the sound before and after it is on screen alike.
+function preview(which, { center = false } = {}) {
   // While playing, the view follows the playhead and leaves the cursor where
   // playback started. Once that is off screen, preview from the playhead
   // (the centre of the view) instead of jumping back to it. A cursor put
@@ -224,7 +226,8 @@ function preview(which) {
   ];
   const [from, to] = ranges[which];
   // Normal playback may have scrolled the selection out of view.
-  ensureVisible(which < 2 ? a : b);
+  if (center) centerOn(which < 2 ? a : b);
+  else ensureVisible(which < 2 ? a : b);
   player.play(Math.max(0, from), to, { preview: true, onEnd: draw });
   draw();
 }
@@ -858,8 +861,9 @@ function drawOverlay() {
 }
 
 // Big labels over the waveform, as mp3DirectCut shows them: the track at the
-// cursor (or the playhead) and the time elapsed since its split point at the
-// top left, the album and "Artist - Title" at the bottom left.
+// cursor (or the playhead) and the time elapsed since its split point, with
+// the album and "Artist - Title" above it. They sit at the bottom left, where
+// the bars are always full: the peaks at the top are what matters.
 function drawTrackLabels(g, c, d) {
   const at = head ?? S.pos;
   let i = 0;
@@ -875,16 +879,17 @@ function drawTrackLabels(g, c, d) {
   g.save();
   g.shadowColor = "rgba(0, 0, 0, 0.8)";
   g.shadowBlur = 4 * d;
-  g.textBaseline = "top";
+  g.textBaseline = "bottom";
+  let y = c.height - pad * 0.6;
   g.font = `600 ${big}px -apple-system, sans-serif`;
   g.fillStyle = "#ffe066";
-  g.fillText(`${trackNumber(t)} > ${min}'${sec}`, pad, pad * 0.6);
-  g.textBaseline = "bottom";
+  g.fillText(`${trackNumber(t)} > ${min}'${sec}`, pad, y);
+  y -= big * 1.05;
   g.font = `${small}px -apple-system, sans-serif`;
   g.fillStyle = "rgba(216, 219, 226, 0.85)";
   const width = c.width - 2 * pad;
-  g.fillText(fitText(g, trackName(t), width), pad, c.height - pad * 0.6);
-  if (S.album) g.fillText(fitText(g, S.album, width), pad, c.height - pad * 0.6 - small * 1.25);
+  g.fillText(fitText(g, trackName(t), width), pad, y);
+  if (S.album) g.fillText(fitText(g, S.album, width), pad, y - small * 1.25);
   g.restore();
 }
 
@@ -1238,7 +1243,7 @@ window.addEventListener("keydown", (e) => {
     // everything needed to refine a split point sits under four fingers.
     case "Digit1":
     case "Digit2":
-      preview(Number(code[5]) - 1);
+      preview(Number(code[5]) - 1, { center: true });
       break;
     case "Digit3":
     case "Digit4":

@@ -57,7 +57,7 @@ removed; the editor moves existing split points only.
 | Key | Action |
 | --- | --- |
 | Space | Play / stop from the cursor |
-| 1 2 (F5 F6) | Play the preview length before / from the selection start |
+| 1 2 (F5 F6) | Play the preview length before / from the selection start; 1 and 2 first bring it to the centre of the view |
 | 3 4 (, .) | Move the selection by one cue frame; with ⇧, ten. Held down, it speeds up |
 | F7 F8 | Play the preview length before / from the selection end |
 | ← → | Move the cursor by the small step (1 s) |
@@ -116,8 +116,8 @@ they are kept in the browser's local storage.
   point put on the selection lines up with it exactly.
 - As in mp3DirectCut, the overview carries each track's title, and the
   waveform shows the track at the cursor (or the playhead) with the time
-  elapsed since its split point in large type, plus the album and
-  "Artist - Title" at the bottom.
+  elapsed since its split point in large type, under the album and
+  "Artist - Title". They sit at the bottom left, clear of the peaks.
 - The waveform uses a dB scale by default (0 dB at the top, -48 dB at the
   bottom), as mp3DirectCut does, so fades and reverb tails stay visible.
 - The waveform is drawn at the same resolution: one bar per cue frame when
